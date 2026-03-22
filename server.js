@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const GROQ_KEY = process.env.GROQ_KEY || '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';
+const GROQ_KEY = process.env.GROQ_KEY;
 
 async function callGroq(messages) {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
