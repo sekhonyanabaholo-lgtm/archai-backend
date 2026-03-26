@@ -105,8 +105,12 @@ Rules:
 
   program.beds = Math.max(1, Math.min(8, Number(program.beds || 3)));
   program.baths = Math.max(1, Math.min(6, Number(program.baths || 2)));
-  program.livingSpaces = Array.isArray(program.livingSpaces) ? program.livingSpaces : ['living', 'kitchen', 'dining'];
-  program.extras = Array.isArray(program.extras) ? program.extras : ['patio', 'garden'];
+  program.livingSpaces = Array.isArray(program.livingSpaces)
+    ? program.livingSpaces
+    : ['living', 'kitchen', 'dining'];
+  program.extras = Array.isArray(program.extras)
+    ? program.extras
+    : ['patio', 'garden'];
   program.notes = typeof program.notes === 'object' && program.notes ? program.notes : {};
   program.masterEnsuite = !!program.masterEnsuite;
   program.sizeBand = program.sizeBand || normaliseSizeBand(size);
@@ -159,10 +163,18 @@ Rules:
 
   updated.beds = Math.max(1, Math.min(8, Number(updated.beds || existingProgram.beds || 3)));
   updated.baths = Math.max(1, Math.min(6, Number(updated.baths || existingProgram.baths || 2)));
-  updated.livingSpaces = Array.isArray(updated.livingSpaces) ? updated.livingSpaces : existingProgram.livingSpaces;
-  updated.extras = Array.isArray(updated.extras) ? updated.extras : existingProgram.extras;
-  updated.notes = typeof updated.notes === 'object' && updated.notes ? updated.notes : existingProgram.notes;
-  updated.masterEnsuite = typeof updated.masterEnsuite === 'boolean' ? updated.masterEnsuite : existingProgram.masterEnsuite;
+  updated.livingSpaces = Array.isArray(updated.livingSpaces)
+    ? updated.livingSpaces
+    : existingProgram.livingSpaces;
+  updated.extras = Array.isArray(updated.extras)
+    ? updated.extras
+    : existingProgram.extras;
+  updated.notes = typeof updated.notes === 'object' && updated.notes
+    ? updated.notes
+    : existingProgram.notes;
+  updated.masterEnsuite = typeof updated.masterEnsuite === 'boolean'
+    ? updated.masterEnsuite
+    : existingProgram.masterEnsuite;
   updated.sizeBand = updated.sizeBand || existingProgram.sizeBand;
   updated.storeyPreference = ['single', 'double', 'either'].includes(updated.storeyPreference)
     ? updated.storeyPreference
@@ -172,7 +184,7 @@ Rules:
 }
 
 /* =========================
-   GEOMETRY HELPERS
+   GEOMETRY + BASIC HELPERS
 ========================= */
 
 function room(name, t, x, y, w, h) {
@@ -203,78 +215,6 @@ function shareEdge(a, b) {
   if (b.y + b.h === a.y && rangesOverlap(a.x, a.x + a.w, b.x, b.x + b.w)) return true;
   return false;
 }
-
-function validateNoOverlap(rooms) {
-  for (let i = 0; i < rooms.length; i++) {
-    for (let j = i + 1; j < rooms.length; j++) {
-      const a = rooms[i];
-      const b = rooms[j];
-      if (a.t === 'garden' || a.t === 'patio' || b.t === 'garden' || b.t === 'patio') continue;
-
-      if (rectsOverlap(a, b)) {
-        throw new Error(
-          `Overlap detected between "${a.name}" (${a.x},${a.y},${a.w},${a.h}) and "${b.name}" (${b.x},${b.y},${b.w},${b.h})`
-        );
-      }
-    }
-  }
-}
-
-function maxBottom(rooms) {
-  if (!rooms.length) return 0;
-  return Math.max(...rooms.map(r => r.y + r.h));
-}
-
-function maxRight(rooms) {
-  if (!rooms.length) return 0;
-  return Math.max(...rooms.map(r => r.x + r.w));
-}
-
-function countBedroomsFromRooms(rooms) {
-  return rooms.filter(r => r.t === 'room').length;
-}
-
-function countBathroomsFromRooms(rooms) {
-  return rooms.filter(r => r.t === 'bathroom' || r.t === 'ensuite').length;
-}
-
-function estimateHomeSize(program, floors) {
-  const bedArea = program.beds * 14;
-  const bathArea = program.baths * 5;
-  const livingArea = 28 + Math.max(0, program.beds - 3) * 2;
-  const kitchenArea = 12 + Math.max(0, program.beds - 4);
-  const diningArea = program.livingSpaces.includes('dining') ? 12 + Math.max(0, program.beds - 4) : 0;
-  const garageArea = program.extras.includes('garage') ? 36 : 0;
-  const studyArea = program.extras.includes('study') ? 10 : 0;
-  const sculleryArea = program.extras.includes('scullery') ? 6 : 0;
-  const laundryArea = program.extras.includes('laundry') ? 6 : 0;
-  const circulationArea = Math.max(8, program.beds * 3);
-  const patioArea = program.extras.includes('patio') ? 18 : 0;
-  const total = bedArea + bathArea + livingArea + kitchenArea + diningArea + garageArea + studyArea + sculleryArea + laundryArea + circulationArea + patioArea;
-  const adjusted = floors === 2 ? total * 0.95 : total;
-  return `~${Math.round(adjusted)}m²`;
-}
-
-function buildDescription(program, storey) {
-  const parts = [];
-  parts.push(storey === 'double' ? 'A practical double-storey home' : 'A practical single-storey home');
-  if (program.notes?.openPlan) parts.push('with an open-plan living core');
-  if (program.extras.includes('study')) parts.push('a dedicated study');
-  if (program.extras.includes('garage')) parts.push('integrated parking');
-  return `${parts.join(' ')} designed around open shared spaces and independent private-room access.`;
-}
-
-function chooseStorey(program) {
-  if (program.storeyPreference === 'single') return 'single';
-  if (program.storeyPreference === 'double') return 'double';
-  if (program.beds >= 7) return 'double';
-  if (program.beds >= 6 && program.sizeBand !== 'large') return 'double';
-  return 'single';
-}
-
-/* =========================
-   PACKING HELPERS
-========================= */
 
 function boundsOf(rooms) {
   if (!rooms.length) return { x: 0, y: 0, w: 0, h: 0, right: 0, bottom: 0 };
@@ -313,9 +253,7 @@ function placeBlockToRight(blockRooms, placedRooms, startX, y, gap = 2) {
   while (overlapsAny(shifted, placedRooms)) {
     x += gap;
     shifted = shiftRooms(blockRooms, x, y);
-    if (x > 200) {
-      throw new Error('Could not place block to the right without overlap');
-    }
+    if (x > 300) throw new Error('Could not place block to the right without overlap');
   }
 
   return shifted;
@@ -328,432 +266,99 @@ function placeBlockBelow(blockRooms, placedRooms, x, startY, gap = 2) {
   while (overlapsAny(shifted, placedRooms)) {
     y += gap;
     shifted = shiftRooms(blockRooms, x, y);
-    if (y > 200) {
-      throw new Error('Could not place block below without overlap');
-    }
+    if (y > 300) throw new Error('Could not place block below without overlap');
   }
 
   return shifted;
 }
 
-/* =========================
-   PUBLIC ZONE
-========================= */
-
-function publicZoneMetrics(program) {
-  const bedFactor = Math.max(0, program.beds - 3);
-
-  return {
-    livingW: Math.min(10, 7 + Math.floor(bedFactor / 2)),
-    livingH: 5 + (program.beds >= 7 ? 1 : 0),
-    kitchenW: Math.min(7, 5 + Math.floor(bedFactor / 3)),
-    kitchenH: program.extras.includes('scullery') ? 3 : 4,
-    diningW: program.livingSpaces.includes('dining') ? Math.min(7, 5 + Math.floor(bedFactor / 3)) : 0,
-    diningH: program.livingSpaces.includes('dining') ? 2 + (program.beds >= 7 ? 1 : 0) : 0
-  };
+function maxRight(rooms) {
+  return rooms.length ? Math.max(...rooms.map(r => r.x + r.w)) : 0;
 }
 
-function buildPublicZone(program) {
-  const rooms = [];
-  const hasDining = program.livingSpaces.includes('dining');
-  const hasGarage = program.extras.includes('garage');
-  const hasStudy = program.extras.includes('study');
-  const hasScullery = program.extras.includes('scullery');
-  const hasLaundry = program.extras.includes('laundry');
-
-  const m = publicZoneMetrics(program);
-
-  rooms.push(room('Living room', 'living', 0, 0, m.livingW, m.livingH));
-  rooms.push(room('Kitchen', 'kitchen', m.livingW, 0, m.kitchenW, m.kitchenH));
-
-  let serviceWidth = m.kitchenW;
-
-  if (hasDining) {
-    rooms.push(room('Dining', 'dining', m.livingW, m.kitchenH, m.diningW, m.diningH));
-    serviceWidth = Math.max(serviceWidth, m.diningW);
-  }
-
-  if (hasScullery) {
-    rooms.push(room('Scullery', 'scullery', m.livingW + m.kitchenW, 0, 4, 2));
-    serviceWidth = Math.max(serviceWidth, m.kitchenW + 4);
-  }
-
-  if (hasLaundry) {
-    rooms.push(room('Laundry', 'laundry', m.livingW + m.kitchenW, hasScullery ? 2 : 0, 3, 2));
-    serviceWidth = Math.max(serviceWidth, m.kitchenW + 3);
-  }
-
-  let x = m.livingW + serviceWidth;
-
-  if (hasStudy) {
-    rooms.push(room('Study', 'study', x, 0, 4, 3));
-    x += 4;
-  }
-
-  rooms.push(room('Guest bath', 'bathroom', Math.max(0, x - 4), 3, 3, 2));
-
-  if (hasGarage) {
-    const garageW = program.beds >= 6 ? 7 : 6;
-    rooms.push(room('Garage', 'garage', x, 0, garageW, 6));
-  }
-
-  return rooms;
+function maxBottom(rooms) {
+  return rooms.length ? Math.max(...rooms.map(r => r.y + r.h)) : 0;
 }
 
-/* =========================
-   PRIVATE ACCESS SPACES
-========================= */
-
-function buildLanding(x, y, w = 4, h = 2) {
-  return room('Landing', 'passage', x, y, w, h);
+function countBedroomsFromRooms(rooms) {
+  return rooms.filter(r => r.t === 'room').length;
 }
 
-function buildPrivateAccessHall(x, y, w, h = 2, label = 'Private hall') {
-  return room(label, 'passage', x, y, w, h);
+function countBathroomsFromRooms(rooms) {
+  return rooms.filter(r => r.t === 'bathroom' || r.t === 'ensuite').length;
 }
 
-function buildBedroomRow(names, x, y, program, includeMasterEnsuite) {
-  const rooms = [];
-  let cursorX = x;
-
-  names.forEach((name) => {
-    const isMaster = /master/i.test(name);
-
-    if (isMaster) {
-      const masterW = program.notes?.premiumMainSuite ? 6 : 5;
-      const masterH = 4;
-      rooms.push(room(name, 'room', cursorX, y, masterW, masterH));
-
-      if (includeMasterEnsuite) {
-        rooms.push(room('En-suite', 'ensuite', cursorX + masterW, y, 3, 2));
-        cursorX += masterW + 3;
-      } else {
-        cursorX += masterW;
+function validateNoOverlap(rooms) {
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i];
+      const b = rooms[j];
+      if (a.t === 'garden' || a.t === 'patio' || b.t === 'garden' || b.t === 'patio') continue;
+      if (rectsOverlap(a, b)) {
+        throw new Error(
+          `Overlap detected between "${a.name}" (${a.x},${a.y},${a.w},${a.h}) and "${b.name}" (${b.x},${b.y},${b.w},${b.h})`
+        );
       }
-    } else {
-      rooms.push(room(name, 'room', cursorX, y, 4, 3));
-      cursorX += 4;
     }
-  });
-
-  return rooms;
-}
-
-function buildSideBedroomColumn(names, x, y, program, side, includeMasterEnsuite) {
-  const rooms = [];
-  let cursorY = y;
-
-  names.forEach((name) => {
-    const isMaster = /master/i.test(name);
-
-    if (isMaster) {
-      const masterW = program.notes?.premiumMainSuite ? 6 : 5;
-      rooms.push(room(name, 'room', x, cursorY, masterW, 4));
-
-      if (includeMasterEnsuite) {
-        const ensuiteX = side === 'left' ? x + masterW : x - 3;
-        rooms.push(room('En-suite', 'ensuite', ensuiteX, cursorY, 3, 2));
-      }
-
-      cursorY += 4;
-    } else {
-      rooms.push(room(name, 'room', x, cursorY, 4, 3));
-      cursorY += 3;
-    }
-  });
-
-  return rooms;
-}
-
-function buildBathroomCluster(count, x, y) {
-  const rooms = [];
-  for (let i = 0; i < count; i++) {
-    rooms.push(room(i === 0 ? 'Main bath' : `Bathroom ${i + 1}`, 'bathroom', x + (i * 3), y, 3, 2));
   }
-  return rooms;
+}
+
+function estimateHomeSize(program, floors) {
+  const bedArea = program.beds * 14;
+  const bathArea = program.baths * 5;
+  const livingArea = 30 + Math.max(0, program.beds - 3) * 3;
+  const kitchenArea = 14 + Math.max(0, program.beds - 4);
+  const diningArea = program.livingSpaces.includes('dining') ? 12 : 0;
+  const garageArea = program.extras.includes('garage') ? 36 : 0;
+  const studyArea = program.extras.includes('study') ? 10 : 0;
+  const sculleryArea = program.extras.includes('scullery') ? 6 : 0;
+  const laundryArea = program.extras.includes('laundry') ? 6 : 0;
+  const circulationArea = Math.max(10, program.beds * 3);
+  const patioArea = program.extras.includes('patio') ? 18 : 0;
+  const total = bedArea + bathArea + livingArea + kitchenArea + diningArea + garageArea + studyArea + sculleryArea + laundryArea + circulationArea + patioArea;
+  return `~${Math.round(floors === 2 ? total * 0.95 : total)}m²`;
 }
 
 /* =========================
-   SINGLE STOREY
+   ARCHETYPE CHOICE
 ========================= */
 
-function buildSingleStorey(program) {
-  const rooms = [];
-  const publicRooms = buildPublicZone(program);
-  rooms.push(...publicRooms);
-
-  const publicBottom = maxBottom(publicRooms);
-  const publicWidth = Math.max(16, maxRight(publicRooms));
-
-  const bedroomNames = ['Master bed'];
-  for (let i = 2; i <= program.beds; i++) bedroomNames.push(`Bedroom ${i}`);
-
-  if (program.beds <= 4) {
-    const privateHall = buildPrivateAccessHall(0, publicBottom, publicWidth, 2, 'Private hall');
-    rooms.push(privateHall);
-
-    const bedRowRaw = buildBedroomRow(
-      bedroomNames,
-      0,
-      0,
-      program,
-      program.masterEnsuite
-    );
-    const bedRow = placeBlockBelow(bedRowRaw, rooms, 0, privateHall.y + privateHall.h, 1);
-    rooms.push(...bedRow);
-
-    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0));
-    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
-    const baths = placeBlockBelow(bathsRaw, rooms, 0, boundsOf(bedRow).bottom + 1, 1);
-    rooms.push(...baths);
-  } else if (program.beds <= 6) {
-    const landing = buildLanding(6, publicBottom, 4, 2);
-    rooms.push(landing);
-
-    const leftNames = [];
-    const rightNames = [];
-
-    bedroomNames.forEach((name, i) => {
-      if (i === 0 || i % 2 === 1) leftNames.push(name);
-      else rightNames.push(name);
-    });
-
-    const leftWingRaw = buildSideBedroomColumn(
-      leftNames,
-      0,
-      0,
-      program,
-      'left',
-      program.masterEnsuite
-    );
-
-    const rightWingRaw = buildSideBedroomColumn(
-      rightNames,
-      0,
-      0,
-      program,
-      'right',
-      false
-    );
-
-    const leftWing = placeBlockBelow(leftWingRaw, rooms, 0, landing.y + landing.h, 1);
-    rooms.push(...leftWing);
-
-    const leftBounds = boundsOf(leftWing);
-    const rightWing = placeBlockToRight(
-      rightWingRaw,
-      rooms,
-      leftBounds.right + 2,
-      landing.y + landing.h,
-      1
-    );
-    rooms.push(...rightWing);
-
-    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0));
-    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
-    const bathStartY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
-    const baths = placeBlockBelow(bathsRaw, rooms, 6, bathStartY, 1);
-    rooms.push(...baths);
-  } else {
-    const landing = buildLanding(8, publicBottom, 4, 2);
-    rooms.push(landing);
-
-    const leftNames = [];
-    const rightNames = [];
-    const lowerNames = [];
-
-    bedroomNames.forEach((name, i) => {
-      if (i === 0) leftNames.push(name);
-      else if (i % 3 === 1) leftNames.push(name);
-      else if (i % 3 === 2) rightNames.push(name);
-      else lowerNames.push(name);
-    });
-
-    const leftWingRaw = buildSideBedroomColumn(
-      leftNames,
-      0,
-      0,
-      program,
-      'left',
-      program.masterEnsuite
-    );
-
-    const rightWingRaw = buildSideBedroomColumn(
-      rightNames,
-      0,
-      0,
-      program,
-      'right',
-      false
-    );
-
-    const leftWing = placeBlockBelow(leftWingRaw, rooms, 0, landing.y + landing.h, 1);
-    rooms.push(...leftWing);
-
-    const rightWing = placeBlockToRight(
-      rightWingRaw,
-      rooms,
-      14,
-      landing.y + landing.h,
-      1
-    );
-    rooms.push(...rightWing);
-
-    const lowerHallY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
-    const lowerHall = buildPrivateAccessHall(
-      0,
-      lowerHallY,
-      Math.max(boundsOf(rightWing).right, 18),
-      2,
-      'Secondary hall'
-    );
-    rooms.push(lowerHall);
-
-    const lowerRowRaw = buildBedroomRow(
-      lowerNames,
-      0,
-      0,
-      program,
-      false
-    );
-
-    const lowerRow = placeBlockBelow(lowerRowRaw, rooms, 2, lowerHall.y + lowerHall.h, 1);
-    rooms.push(...lowerRow);
-
-    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0));
-    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
-    const baths = placeBlockBelow(bathsRaw, rooms, 8, boundsOf(lowerRow).bottom + 1, 1);
-    rooms.push(...baths);
-  }
-
-  const width = Math.max(publicWidth, maxRight(rooms));
-  const outdoorY = maxBottom(rooms);
-
-  if (program.extras.includes('patio')) {
-    rooms.push(room('Patio', 'patio', 0, outdoorY, width, 3));
-  }
-  if (program.extras.includes('garden')) {
-    rooms.push(room('Garden', 'garden', 0, outdoorY + (program.extras.includes('patio') ? 3 : 0), width, 5));
-  }
-
-  validateNoOverlap(rooms);
-
-  return {
-    storey: 'single',
-    desc: buildDescription(program, 'single'),
-    rooms,
-    sum: {
-      beds: countBedroomsFromRooms(rooms),
-      baths: countBathroomsFromRooms(rooms),
-      size: estimateHomeSize(program, 1),
-      floors: 1
-    }
-  };
+function chooseStorey(program) {
+  if (program.storeyPreference === 'single') return 'single';
+  if (program.storeyPreference === 'double') return 'double';
+  if (program.beds >= 7) return 'double';
+  if (program.beds >= 6 && program.sizeBand !== 'large') return 'double';
+  return 'single';
 }
 
-/* =========================
-   DOUBLE STOREY
-========================= */
+function chooseArchetype(program) {
+  const storey = chooseStorey(program);
 
-function buildDoubleStorey(program) {
-  const ground = [];
-  const first = [];
-
-  const publicRooms = buildPublicZone(program);
-  ground.push(...publicRooms);
-
-  const publicBottom = maxBottom(publicRooms);
-  const stairX = Math.max(7, maxRight(publicRooms) - 2);
-  ground.push(room('Stairs', 'stairs', stairX, Math.max(2, publicBottom - 3), 2, 3));
-
-  const groundWidth = Math.max(16, maxRight(ground));
-
-  if (program.extras.includes('patio')) {
-    ground.push(room('Patio', 'patio', 0, maxBottom(ground), groundWidth, 3));
+  if (storey === 'double') {
+    return 'double_central_core';
   }
-  if (program.extras.includes('garden')) {
-    ground.push(room('Garden', 'garden', 0, maxBottom(ground), groundWidth, 5));
-  }
-
-  const landing = buildLanding(6, 0, 4, 2);
-  first.push(landing);
-  first.push(room('Stairs', 'stairs', 6, 2, 2, 3));
-
-  const bedroomNames = ['Master bed'];
-  for (let i = 2; i <= program.beds; i++) bedroomNames.push(`Bedroom ${i}`);
 
   if (program.beds <= 5) {
-    const leftNames = bedroomNames.filter((_, i) => i % 2 === 0);
-    const rightNames = bedroomNames.filter((_, i) => i % 2 === 1);
-
-    const leftWingRaw = buildSideBedroomColumn(leftNames, 0, 0, program, 'left', false);
-    const rightWingRaw = buildSideBedroomColumn(rightNames, 0, 0, program, 'right', true);
-
-    const leftWing = placeBlockBelow(leftWingRaw, first, 0, landing.y + landing.h, 1);
-    first.push(...leftWing);
-
-    const rightWing = placeBlockToRight(rightWingRaw, first, 10, landing.y + landing.h, 1);
-    first.push(...rightWing);
-
-    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0) - 1);
-    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
-    const bathY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
-    const baths = placeBlockBelow(bathsRaw, first, 6, bathY, 1);
-    first.push(...baths);
-  } else {
-    const leftNames = [];
-    const rightNames = [];
-    const lowerNames = [];
-
-    bedroomNames.forEach((name, i) => {
-      if (i === 0) rightNames.push(name);
-      else if (i % 3 === 1) leftNames.push(name);
-      else if (i % 3 === 2) rightNames.push(name);
-      else lowerNames.push(name);
-    });
-
-    const leftWingRaw = buildSideBedroomColumn(leftNames, 0, 0, program, 'left', false);
-    const rightWingRaw = buildSideBedroomColumn(rightNames, 0, 0, program, 'right', true);
-
-    const leftWing = placeBlockBelow(leftWingRaw, first, 0, landing.y + landing.h, 1);
-    first.push(...leftWing);
-
-    const rightWing = placeBlockToRight(rightWingRaw, first, 14, landing.y + landing.h, 1);
-    first.push(...rightWing);
-
-    const lowerHallY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
-    const lowerHall = buildPrivateAccessHall(2, lowerHallY, 16, 2, 'Upper hall');
-    first.push(lowerHall);
-
-    const lowerRowRaw = buildBedroomRow(lowerNames, 0, 0, program, false);
-    const lowerRow = placeBlockBelow(lowerRowRaw, first, 4, lowerHall.y + lowerHall.h, 1);
-    first.push(...lowerRow);
-
-    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0) - 1);
-    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
-    const baths = placeBlockBelow(bathsRaw, first, 8, boundsOf(lowerRow).bottom + 1, 1);
-    first.push(...baths);
+    return 'single_central_great_room';
   }
 
-  validateNoOverlap(ground);
-  validateNoOverlap(first);
+  return 'single_central_great_room_large';
+}
 
-  return {
-    storey: 'double',
-    desc: buildDescription(program, 'double'),
-    ground,
-    first,
-    sum: {
-      beds: countBedroomsFromRooms([...ground, ...first]),
-      baths: countBathroomsFromRooms([...ground, ...first]),
-      size: estimateHomeSize(program, 2),
-      floors: 2
-    }
-  };
+function buildDescription(program, storey, archetype) {
+  let base = storey === 'double'
+    ? 'A double-storey family home'
+    : 'A single-storey family home';
+
+  if (archetype.includes('central')) {
+    base += ' organised around a central shared living core';
+  }
+
+  return `${base} with independent bedroom access, clear zoning, and a more natural architectural flow.`;
 }
 
 /* =========================
-   ACCESS VALIDATION
+   ACCESS GRAPH VALIDATION
 ========================= */
 
 function buildAdjacencyGraph(rooms) {
@@ -788,9 +393,7 @@ function accessibleWithoutCrossingBedrooms(rooms, startNames, targetName) {
       if (!r) continue;
 
       const isTarget = next === targetName;
-      const blocked = r.t === 'room' && !isTarget;
-
-      if (blocked) continue;
+      if (r.t === 'room' && !isTarget) continue;
 
       visited.add(next);
       queue.push(next);
@@ -803,7 +406,7 @@ function accessibleWithoutCrossingBedrooms(rooms, startNames, targetName) {
 function validateIndependentAccessSingle(rooms) {
   const bedrooms = rooms.filter(r => r.t === 'room');
   const starts = rooms
-    .filter(r => ['living', 'dining', 'kitchen', 'passage', 'stairs'].includes(r.t))
+    .filter(r => ['living', 'dining', 'kitchen', 'passage'].includes(r.t))
     .map(r => r.name);
 
   for (const bedroom of bedrooms) {
@@ -813,17 +416,379 @@ function validateIndependentAccessSingle(rooms) {
   }
 }
 
-function validateIndependentAccessDouble(_ground, first) {
-  const firstBedrooms = first.filter(r => r.t === 'room');
+function validateIndependentAccessDouble(ground, first) {
+  void ground;
+  const bedrooms = first.filter(r => r.t === 'room');
   const starts = first
-    .filter(r => r.t === 'passage' || r.t === 'stairs')
+    .filter(r => ['passage', 'stairs'].includes(r.t))
     .map(r => r.name);
 
-  for (const bedroom of firstBedrooms) {
+  for (const bedroom of bedrooms) {
     if (!accessibleWithoutCrossingBedrooms(first, starts, bedroom.name)) {
       throw new Error(`${bedroom.name} does not have independent upstairs access`);
     }
   }
+}
+
+/* =========================
+   ROOM BLOCK BUILDERS
+========================= */
+
+function buildFoyerBlock() {
+  return [
+    room('Foyer', 'passage', 0, 0, 4, 3)
+  ];
+}
+
+function buildGreatRoomBlock(program) {
+  const w = program.beds >= 6 ? 8 : 7;
+  const h = program.beds >= 6 ? 6 : 5;
+  return [
+    room('Great room', 'living', 0, 0, w, h)
+  ];
+}
+
+function buildKitchenDiningBlock(program) {
+  const rooms = [];
+  const kitchenW = program.beds >= 6 ? 6 : 5;
+  const kitchenH = 4;
+
+  rooms.push(room('Kitchen', 'kitchen', 0, 0, kitchenW, kitchenH));
+
+  if (program.livingSpaces.includes('dining')) {
+    rooms.push(room('Dining', 'dining', 0, kitchenH, kitchenW, 3));
+  }
+
+  if (program.extras.includes('scullery')) {
+    rooms.push(room('Scullery', 'scullery', kitchenW, 0, 3, 2));
+  }
+
+  if (program.extras.includes('laundry')) {
+    rooms.push(room('Laundry', 'laundry', kitchenW, 2, 3, 2));
+  }
+
+  return rooms;
+}
+
+function buildGarageServiceBlock(program) {
+  const rooms = [];
+  let y = 0;
+
+  if (program.extras.includes('study')) {
+    rooms.push(room('Study', 'study', 0, y, 4, 3));
+    y += 3;
+  }
+
+  rooms.push(room('Guest bath', 'bathroom', 0, y, 3, 2));
+  y += 2;
+
+  if (program.extras.includes('garage')) {
+    rooms.push(room('Garage', 'garage', 0, y, program.beds >= 6 ? 7 : 6, 6));
+  }
+
+  return rooms;
+}
+
+function buildMasterSuiteBlock(program) {
+  const rooms = [];
+  const masterW = program.notes?.premiumMainSuite ? 6 : 5;
+  const masterH = 4;
+
+  rooms.push(room('Master bed', 'room', 0, 0, masterW, masterH));
+
+  if (program.masterEnsuite) {
+    rooms.push(room('En-suite', 'ensuite', masterW, 0, 3, 2));
+    rooms.push(room('Master bath', 'bathroom', masterW, 2, 3, 2));
+  }
+
+  return rooms;
+}
+
+function buildSecondaryBedroomWing(program, count) {
+  const rooms = [];
+  let y = 0;
+
+  for (let i = 0; i < count; i++) {
+    rooms.push(room(`Bedroom ${i + 2}`, 'room', 0, y, 4, 3));
+    y += 3;
+  }
+
+  const extraBaths = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0));
+  for (let i = 0; i < extraBaths; i++) {
+    rooms.push(room(i === 0 ? 'Main bath' : `Bathroom ${i + 1}`, 'bathroom', 4, i * 2, 3, 2));
+  }
+
+  return rooms;
+}
+
+function buildUpperBedroomCluster(program, names, includeMaster) {
+  const rooms = [];
+  let x = 0;
+
+  names.forEach((name) => {
+    if (/master/i.test(name) && includeMaster) {
+      const masterW = program.notes?.premiumMainSuite ? 6 : 5;
+      rooms.push(room(name, 'room', x, 0, masterW, 4));
+      if (program.masterEnsuite) {
+        rooms.push(room('En-suite', 'ensuite', x + masterW, 0, 3, 2));
+        rooms.push(room('Master bath', 'bathroom', x + masterW, 2, 3, 2));
+        x += masterW + 3;
+      } else {
+        x += masterW;
+      }
+    } else {
+      rooms.push(room(name, 'room', x, 0, 4, 3));
+      x += 4;
+    }
+  });
+
+  return rooms;
+}
+
+/* =========================
+   SINGLE STOREY ARCHETYPE
+========================= */
+
+function buildSingleCentralGreatRoom(program) {
+  const rooms = [];
+
+  const foyer = buildFoyerBlock();
+  const greatRoom = buildGreatRoomBlock(program);
+  const kitchenDining = buildKitchenDiningBlock(program);
+  const masterSuite = buildMasterSuiteBlock(program);
+  const secondaryWing = buildSecondaryBedroomWing(program, Math.max(1, program.beds - 1));
+  const garageService = buildGarageServiceBlock(program);
+
+  rooms.push(...foyer);
+
+  const greatPlaced = placeBlockBelow(greatRoom, rooms, 4, 0, 1);
+  rooms.push(...greatPlaced);
+
+  const kitchenPlaced = placeBlockToRight(kitchenDining, rooms, boundsOf(greatPlaced).right + 1, 0, 1);
+  rooms.push(...kitchenPlaced);
+
+  const masterPlaced = placeBlockToRight(masterSuite, rooms, boundsOf(greatPlaced).right + 2, boundsOf(greatPlaced).bottom + 1, 1);
+  rooms.push(...masterPlaced);
+
+  const secWingPlaced = placeBlockToRight(secondaryWing, rooms, 0, boundsOf(greatPlaced).bottom + 1, 1);
+  rooms.push(...secWingPlaced);
+
+  const servicePlaced = garageService.length
+    ? placeBlockBelow(garageService, rooms, 0, boundsOf(secWingPlaced).bottom + 1, 1)
+    : [];
+  rooms.push(...servicePlaced);
+
+  const connectorY = boundsOf(greatPlaced).bottom;
+  const connectorWidth = Math.max(boundsOf(masterPlaced).right, boundsOf(secWingPlaced).right);
+  rooms.push(room('Private connector', 'passage', 0, connectorY, connectorWidth, 2));
+
+  const sideLinkX = boundsOf(greatPlaced).right - 1;
+  const sideLinkY = 2;
+  const sideLinkH = Math.max(3, boundsOf(masterPlaced).y - sideLinkY);
+  rooms.push(room('Gallery', 'passage', sideLinkX, sideLinkY, 2, sideLinkH));
+
+  const width = Math.max(maxRight(rooms), 18);
+  const outdoorY = maxBottom(rooms);
+
+  if (program.extras.includes('patio')) {
+    rooms.push(room('Patio', 'patio', 0, outdoorY, width, 3));
+  }
+  if (program.extras.includes('garden')) {
+    rooms.push(room('Garden', 'garden', 0, outdoorY + (program.extras.includes('patio') ? 3 : 0), width, 5));
+  }
+
+  validateNoOverlap(rooms);
+
+  return {
+    storey: 'single',
+    desc: buildDescription(program, 'single', 'single_central_great_room'),
+    rooms,
+    sum: {
+      beds: countBedroomsFromRooms(rooms),
+      baths: countBathroomsFromRooms(rooms),
+      size: estimateHomeSize(program, 1),
+      floors: 1
+    }
+  };
+}
+
+function buildSingleCentralGreatRoomLarge(program) {
+  const rooms = [];
+
+  const foyer = buildFoyerBlock();
+  const greatRoom = buildGreatRoomBlock(program);
+  const kitchenDining = buildKitchenDiningBlock(program);
+  const masterSuite = buildMasterSuiteBlock(program);
+  const garageService = buildGarageServiceBlock(program);
+
+  const secondaryNamesA = [];
+  const secondaryNamesB = [];
+
+  for (let i = 2; i <= program.beds; i++) {
+    if (i % 2 === 0) secondaryNamesA.push(`Bedroom ${i}`);
+    else secondaryNamesB.push(`Bedroom ${i}`);
+  }
+
+  const wingA = buildSecondaryBedroomWing(
+    { ...program, baths: Math.max(1, Math.ceil((program.baths - (program.masterEnsuite ? 1 : 0)) / 2)) },
+    secondaryNamesA.length
+  );
+  const wingB = buildSecondaryBedroomWing(
+    { ...program, baths: Math.max(1, Math.floor((program.baths - (program.masterEnsuite ? 1 : 0)) / 2) || 1) },
+    secondaryNamesB.length
+  );
+
+  rooms.push(...foyer);
+
+  const greatPlaced = placeBlockBelow(greatRoom, rooms, 5, 0, 1);
+  rooms.push(...greatPlaced);
+
+  const kitchenPlaced = placeBlockToRight(kitchenDining, rooms, boundsOf(greatPlaced).right + 1, 0, 1);
+  rooms.push(...kitchenPlaced);
+
+  const wingAPlaced = placeBlockBelow(wingA, rooms, 0, boundsOf(greatPlaced).bottom + 2, 1);
+  rooms.push(...wingAPlaced);
+
+  const masterPlaced = placeBlockToRight(masterSuite, rooms, boundsOf(greatPlaced).right + 2, boundsOf(greatPlaced).bottom + 2, 1);
+  rooms.push(...masterPlaced);
+
+  const wingBPlaced = placeBlockBelow(wingB, rooms, boundsOf(masterPlaced).right + 2, boundsOf(greatPlaced).bottom + 2, 1);
+  rooms.push(...wingBPlaced);
+
+  const servicePlaced = garageService.length
+    ? placeBlockBelow(
+        garageService,
+        rooms,
+        0,
+        Math.max(boundsOf(wingAPlaced).bottom, boundsOf(masterPlaced).bottom, boundsOf(wingBPlaced).bottom) + 1,
+        1
+      )
+    : [];
+  rooms.push(...servicePlaced);
+
+  const hallY = boundsOf(greatPlaced).bottom;
+  const hallW = Math.max(boundsOf(wingBPlaced).right, boundsOf(masterPlaced).right);
+  rooms.push(room('Private hall', 'passage', 0, hallY, hallW, 2));
+
+  const centralSpineX = boundsOf(greatPlaced).x + 2;
+  rooms.push(room('Link hall', 'passage', centralSpineX, 2, 2, hallY));
+
+  const width = Math.max(maxRight(rooms), 24);
+  const outdoorY = maxBottom(rooms);
+
+  if (program.extras.includes('patio')) {
+    rooms.push(room('Patio', 'patio', 0, outdoorY, width, 3));
+  }
+  if (program.extras.includes('garden')) {
+    rooms.push(room('Garden', 'garden', 0, outdoorY + (program.extras.includes('patio') ? 3 : 0), width, 5));
+  }
+
+  validateNoOverlap(rooms);
+
+  return {
+    storey: 'single',
+    desc: buildDescription(program, 'single', 'single_central_great_room_large'),
+    rooms,
+    sum: {
+      beds: countBedroomsFromRooms(rooms),
+      baths: countBathroomsFromRooms(rooms),
+      size: estimateHomeSize(program, 1),
+      floors: 1
+    }
+  };
+}
+
+/* =========================
+   DOUBLE STOREY ARCHETYPE
+========================= */
+
+function buildDoubleCentralCore(program) {
+  const ground = [];
+  const first = [];
+
+  const foyer = buildFoyerBlock();
+  const greatRoom = buildGreatRoomBlock(program);
+  const kitchenDining = buildKitchenDiningBlock(program);
+  const garageService = buildGarageServiceBlock(program);
+
+  ground.push(...foyer);
+
+  const greatPlaced = placeBlockBelow(greatRoom, ground, 4, 0, 1);
+  ground.push(...greatPlaced);
+
+  const kitchenPlaced = placeBlockToRight(kitchenDining, ground, boundsOf(greatPlaced).right + 1, 0, 1);
+  ground.push(...kitchenPlaced);
+
+  ground.push(room('Stairs', 'stairs', boundsOf(greatPlaced).right - 1, boundsOf(greatPlaced).bottom - 1, 2, 3));
+  ground.push(room('Powder', 'bathroom', boundsOf(greatPlaced).right + 1, boundsOf(greatPlaced).bottom, 3, 2));
+
+  const servicePlaced = garageService.length
+    ? placeBlockBelow(garageService, ground, 0, boundsOf(greatPlaced).bottom + 2, 1)
+    : [];
+  ground.push(...servicePlaced);
+
+  const groundWidth = Math.max(maxRight(ground), 18);
+  if (program.extras.includes('patio')) {
+    ground.push(room('Patio', 'patio', 0, maxBottom(ground), groundWidth, 3));
+  }
+  if (program.extras.includes('garden')) {
+    ground.push(room('Garden', 'garden', 0, maxBottom(ground), groundWidth, 5));
+  }
+
+  first.push(room('Landing', 'passage', 6, 0, 4, 2));
+  first.push(room('Stairs', 'stairs', 6, 2, 2, 3));
+  first.push(room('Upper hall', 'passage', 2, 5, 14, 2));
+
+  const names = ['Master bed'];
+  for (let i = 2; i <= program.beds; i++) names.push(`Bedroom ${i}`);
+
+  const leftNames = [];
+  const rightNames = [];
+
+  names.forEach((name, i) => {
+    if (i === 0 || i % 2 === 0) rightNames.push(name);
+    else leftNames.push(name);
+  });
+
+  const leftBlock = buildUpperBedroomCluster(program, leftNames, false);
+  const rightBlock = buildUpperBedroomCluster(program, rightNames, true);
+
+  const leftPlaced = placeBlockBelow(leftBlock, first, 0, 7, 1);
+  first.push(...leftPlaced);
+
+  const rightPlaced = placeBlockToRight(rightBlock, first, 10, 7, 1);
+  first.push(...rightPlaced);
+
+  const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0) - 1);
+  const bathBlock = [];
+  for (let i = 0; i < bathsNeeded; i++) {
+    bathBlock.push(room(i === 0 ? 'Main bath' : `Bathroom ${i + 1}`, 'bathroom', i * 3, 0, 3, 2));
+  }
+
+  const bathsPlaced = placeBlockBelow(
+    bathBlock,
+    first,
+    6,
+    Math.max(boundsOf(leftPlaced).bottom, boundsOf(rightPlaced).bottom) + 1,
+    1
+  );
+  first.push(...bathsPlaced);
+
+  validateNoOverlap(ground);
+  validateNoOverlap(first);
+
+  return {
+    storey: 'double',
+    desc: buildDescription(program, 'double', 'double_central_core'),
+    ground,
+    first,
+    sum: {
+      beds: countBedroomsFromRooms([...ground, ...first]),
+      baths: countBathroomsFromRooms([...ground, ...first]),
+      size: estimateHomeSize(program, 2),
+      floors: 2
+    }
+  };
 }
 
 /* =========================
@@ -1030,7 +995,7 @@ function attachDoorsAndWindows(plan) {
 }
 
 /* =========================
-   FULL VALIDATION
+   PLAN VALIDATION
 ========================= */
 
 function validatePlan(plan) {
@@ -1084,6 +1049,9 @@ function validatePlan(plan) {
     errors.push(err.message);
   }
 
+  if (plan.doors && !Array.isArray(plan.doors)) errors.push('Doors must be an array');
+  if (plan.windows && !Array.isArray(plan.windows)) errors.push('Windows must be an array');
+
   return errors;
 }
 
@@ -1091,10 +1059,27 @@ function validatePlan(plan) {
    MAIN BUILDER
 ========================= */
 
+function buildBasePlanFromArchetype(program) {
+  const archetype = chooseArchetype(program);
+
+  if (archetype === 'single_central_great_room') {
+    return buildSingleCentralGreatRoom(program);
+  }
+
+  if (archetype === 'single_central_great_room_large') {
+    return buildSingleCentralGreatRoomLarge(program);
+  }
+
+  if (archetype === 'double_central_core') {
+    return buildDoubleCentralCore(program);
+  }
+
+  throw new Error(`Unknown archetype: ${archetype}`);
+}
+
 function buildPlanDeterministically(program) {
-  const storey = chooseStorey(program);
-  const basePlan = storey === 'double' ? buildDoubleStorey(program) : buildSingleStorey(program);
-  return attachDoorsAndWindows(basePlan);
+  const base = buildBasePlanFromArchetype(program);
+  return attachDoorsAndWindows(base);
 }
 
 /* =========================
