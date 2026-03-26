@@ -7,19 +7,26 @@ app.use(cors());
 app.use(express.json());
 
 const GROQ_KEY = process.env.GROQ_KEY;
+if (!GROQ_KEY) {
+  throw new Error('Missing GROQ_KEY environment variable');
+}
 
-async function callGroq(messages) {
+/* =========================
+   AI HELPERS
+========================= */
+
+async function callGroq(messages, temperature = 0.2) {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${GROQ_KEY}`,
+      Authorization: `Bearer ${GROQ_KEY}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages,
-      max_tokens: 3000,
-      temperature: 0.1
+      max_tokens: 1400,
+      temperature
     })
   });
 
@@ -29,66 +36,1070 @@ async function callGroq(messages) {
     throw new Error(data?.error?.message || 'Groq request failed');
   }
 
-  if (!data?.choices?.[0]?.message?.content) {
-    throw new Error('Groq returned no content');
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('No content returned from Groq');
+
+  return content.trim();
+}
+
+function extractJson(text) {
+  const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON object found in model response');
+  return JSON.parse(match[0]);
+}
+
+function normaliseSizeBand(size) {
+  const s = String(size || '').toLowerCase();
+  if (s.includes('small')) return 'small';
+  if (s.includes('large')) return 'large';
+  return 'medium';
+}
+
+/* =========================
+   PROGRAM EXTRACTION
+========================= */
+
+async function generateProgram(fullContext, style, size) {
+  const prompt = `You are an expert South African residential architect.
+
+Read the client brief and convert it into a clean architectural program.
+Do NOT produce coordinates.
+Do NOT produce a floor plan.
+Do NOT explain anything.
+
+CLIENT BRIEF:
+${fullContext}
+
+Style preference: ${style}
+Size preference: ${size}
+
+Return ONLY JSON in this exact structure:
+{
+  "storeyPreference": "single" or "double" or "either",
+  "beds": 4,
+  "baths": 3,
+  "livingSpaces": ["living", "dining", "kitchen"],
+  "extras": ["garage", "study", "scullery", "laundry", "patio", "garden"],
+  "masterEnsuite": true,
+  "notes": {
+    "openPlan": true,
+    "entertainmentFocus": false,
+    "premiumMainSuite": true
+  },
+  "sizeBand": "small" or "medium" or "large"
+}
+
+Rules:
+- Infer likely requirements from the brief
+- Always include living and kitchen
+- Include dining unless clearly unnecessary
+- Include patio and garden unless clearly unnecessary
+- Include garage, study, scullery, laundry only if requested or strongly implied
+- beds must be between 1 and 8
+- baths must be between 1 and 6
+- Return ONLY raw JSON`;
+
+  const text = await callGroq([{ role: 'user', content: prompt }], 0.1);
+  const program = extractJson(text);
+
+  program.beds = Math.max(1, Math.min(8, Number(program.beds || 3)));
+  program.baths = Math.max(1, Math.min(6, Number(program.baths || 2)));
+  program.livingSpaces = Array.isArray(program.livingSpaces) ? program.livingSpaces : ['living', 'kitchen', 'dining'];
+  program.extras = Array.isArray(program.extras) ? program.extras : ['patio', 'garden'];
+  program.notes = typeof program.notes === 'object' && program.notes ? program.notes : {};
+  program.masterEnsuite = !!program.masterEnsuite;
+  program.sizeBand = program.sizeBand || normaliseSizeBand(size);
+  program.storeyPreference = ['single', 'double', 'either'].includes(program.storeyPreference)
+    ? program.storeyPreference
+    : 'either';
+
+  return program;
+}
+
+async function reviseProgram(existingProgram, request, description) {
+  const prompt = `You are an expert South African residential architect.
+
+You are revising an existing architectural program.
+
+ORIGINAL CLIENT DESCRIPTION:
+${description || ''}
+
+CURRENT PROGRAM:
+${JSON.stringify(existingProgram, null, 2)}
+
+REVISION REQUEST:
+${request}
+
+Update the program to reflect the new request.
+
+Return ONLY JSON in this exact structure:
+{
+  "storeyPreference": "single" or "double" or "either",
+  "beds": 4,
+  "baths": 3,
+  "livingSpaces": ["living", "dining", "kitchen"],
+  "extras": ["garage", "study", "scullery", "laundry", "patio", "garden"],
+  "masterEnsuite": true,
+  "notes": {
+    "openPlan": true,
+    "entertainmentFocus": false,
+    "premiumMainSuite": true
+  },
+  "sizeBand": "small" or "medium" or "large"
+}
+
+Rules:
+- Keep the existing program unless the revision clearly changes it
+- If the user asks for a room to be bigger, do NOT change bedroom counts unless explicitly requested
+- Return ONLY raw JSON`;
+
+  const text = await callGroq([{ role: 'user', content: prompt }], 0.1);
+  const updated = extractJson(text);
+
+  updated.beds = Math.max(1, Math.min(8, Number(updated.beds || existingProgram.beds || 3)));
+  updated.baths = Math.max(1, Math.min(6, Number(updated.baths || existingProgram.baths || 2)));
+  updated.livingSpaces = Array.isArray(updated.livingSpaces) ? updated.livingSpaces : existingProgram.livingSpaces;
+  updated.extras = Array.isArray(updated.extras) ? updated.extras : existingProgram.extras;
+  updated.notes = typeof updated.notes === 'object' && updated.notes ? updated.notes : existingProgram.notes;
+  updated.masterEnsuite = typeof updated.masterEnsuite === 'boolean' ? updated.masterEnsuite : existingProgram.masterEnsuite;
+  updated.sizeBand = updated.sizeBand || existingProgram.sizeBand;
+  updated.storeyPreference = ['single', 'double', 'either'].includes(updated.storeyPreference)
+    ? updated.storeyPreference
+    : existingProgram.storeyPreference;
+
+  return updated;
+}
+
+/* =========================
+   GEOMETRY HELPERS
+========================= */
+
+function room(name, t, x, y, w, h) {
+  return { name, t, x, y, w, h };
+}
+
+function area(w, h) {
+  return w * h;
+}
+
+function rectsOverlap(a, b) {
+  return !(
+    a.x + a.w <= b.x ||
+    b.x + b.w <= a.x ||
+    a.y + a.h <= b.y ||
+    b.y + b.h <= a.y
+  );
+}
+
+function rangesOverlap(a1, a2, b1, b2) {
+  return a1 < b2 && a2 > b1;
+}
+
+function shareEdge(a, b) {
+  if (a.x + a.w === b.x && rangesOverlap(a.y, a.y + a.h, b.y, b.y + b.h)) return true;
+  if (b.x + b.w === a.x && rangesOverlap(a.y, a.y + a.h, b.y, b.y + b.h)) return true;
+  if (a.y + a.h === b.y && rangesOverlap(a.x, a.x + a.w, b.x, b.x + b.w)) return true;
+  if (b.y + b.h === a.y && rangesOverlap(a.x, a.x + a.w, b.x, b.x + b.w)) return true;
+  return false;
+}
+
+function validateNoOverlap(rooms) {
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i];
+      const b = rooms[j];
+      if (a.t === 'garden' || a.t === 'patio' || b.t === 'garden' || b.t === 'patio') continue;
+
+      if (rectsOverlap(a, b)) {
+        throw new Error(
+          `Overlap detected between "${a.name}" (${a.x},${a.y},${a.w},${a.h}) and "${b.name}" (${b.x},${b.y},${b.w},${b.h})`
+        );
+      }
+    }
+  }
+}
+
+function maxBottom(rooms) {
+  if (!rooms.length) return 0;
+  return Math.max(...rooms.map(r => r.y + r.h));
+}
+
+function maxRight(rooms) {
+  if (!rooms.length) return 0;
+  return Math.max(...rooms.map(r => r.x + r.w));
+}
+
+function countBedroomsFromRooms(rooms) {
+  return rooms.filter(r => r.t === 'room').length;
+}
+
+function countBathroomsFromRooms(rooms) {
+  return rooms.filter(r => r.t === 'bathroom' || r.t === 'ensuite').length;
+}
+
+function estimateHomeSize(program, floors) {
+  const bedArea = program.beds * 14;
+  const bathArea = program.baths * 5;
+  const livingArea = 28 + Math.max(0, program.beds - 3) * 2;
+  const kitchenArea = 12 + Math.max(0, program.beds - 4);
+  const diningArea = program.livingSpaces.includes('dining') ? 12 + Math.max(0, program.beds - 4) : 0;
+  const garageArea = program.extras.includes('garage') ? 36 : 0;
+  const studyArea = program.extras.includes('study') ? 10 : 0;
+  const sculleryArea = program.extras.includes('scullery') ? 6 : 0;
+  const laundryArea = program.extras.includes('laundry') ? 6 : 0;
+  const circulationArea = Math.max(8, program.beds * 3);
+  const patioArea = program.extras.includes('patio') ? 18 : 0;
+  const total = bedArea + bathArea + livingArea + kitchenArea + diningArea + garageArea + studyArea + sculleryArea + laundryArea + circulationArea + patioArea;
+  const adjusted = floors === 2 ? total * 0.95 : total;
+  return `~${Math.round(adjusted)}m²`;
+}
+
+function buildDescription(program, storey) {
+  const parts = [];
+  parts.push(storey === 'double' ? 'A practical double-storey home' : 'A practical single-storey home');
+  if (program.notes?.openPlan) parts.push('with an open-plan living core');
+  if (program.extras.includes('study')) parts.push('a dedicated study');
+  if (program.extras.includes('garage')) parts.push('integrated parking');
+  return `${parts.join(' ')} designed around open shared spaces and independent private-room access.`;
+}
+
+function chooseStorey(program) {
+  if (program.storeyPreference === 'single') return 'single';
+  if (program.storeyPreference === 'double') return 'double';
+  if (program.beds >= 7) return 'double';
+  if (program.beds >= 6 && program.sizeBand !== 'large') return 'double';
+  return 'single';
+}
+
+/* =========================
+   PACKING HELPERS
+========================= */
+
+function boundsOf(rooms) {
+  if (!rooms.length) return { x: 0, y: 0, w: 0, h: 0, right: 0, bottom: 0 };
+  const minX = Math.min(...rooms.map(r => r.x));
+  const minY = Math.min(...rooms.map(r => r.y));
+  const maxX = Math.max(...rooms.map(r => r.x + r.w));
+  const maxY = Math.max(...rooms.map(r => r.y + r.h));
+  return {
+    x: minX,
+    y: minY,
+    w: maxX - minX,
+    h: maxY - minY,
+    right: maxX,
+    bottom: maxY
+  };
+}
+
+function shiftRooms(rooms, dx, dy) {
+  return rooms.map(r => ({ ...r, x: r.x + dx, y: r.y + dy }));
+}
+
+function overlapsAny(candidateRooms, placedRooms) {
+  for (const a of candidateRooms) {
+    for (const b of placedRooms) {
+      if (a.t === 'garden' || a.t === 'patio' || b.t === 'garden' || b.t === 'patio') continue;
+      if (rectsOverlap(a, b)) return true;
+    }
+  }
+  return false;
+}
+
+function placeBlockToRight(blockRooms, placedRooms, startX, y, gap = 2) {
+  let x = startX;
+  let shifted = shiftRooms(blockRooms, x, y);
+
+  while (overlapsAny(shifted, placedRooms)) {
+    x += gap;
+    shifted = shiftRooms(blockRooms, x, y);
+    if (x > 200) {
+      throw new Error('Could not place block to the right without overlap');
+    }
   }
 
-  return data.choices[0].message.content.trim();
+  return shifted;
 }
 
-function cleanJson(text) {
-  return text.replace(/```json/g, '').replace(/```/g, '').trim();
+function placeBlockBelow(blockRooms, placedRooms, x, startY, gap = 2) {
+  let y = startY;
+  let shifted = shiftRooms(blockRooms, x, y);
+
+  while (overlapsAny(shifted, placedRooms)) {
+    y += gap;
+    shifted = shiftRooms(blockRooms, x, y);
+    if (y > 200) {
+      throw new Error('Could not place block below without overlap');
+    }
+  }
+
+  return shifted;
 }
 
-function safeParseJson(text) {
-  return JSON.parse(cleanJson(text));
+/* =========================
+   PUBLIC ZONE
+========================= */
+
+function publicZoneMetrics(program) {
+  const bedFactor = Math.max(0, program.beds - 3);
+
+  return {
+    livingW: Math.min(10, 7 + Math.floor(bedFactor / 2)),
+    livingH: 5 + (program.beds >= 7 ? 1 : 0),
+    kitchenW: Math.min(7, 5 + Math.floor(bedFactor / 3)),
+    kitchenH: program.extras.includes('scullery') ? 3 : 4,
+    diningW: program.livingSpaces.includes('dining') ? Math.min(7, 5 + Math.floor(bedFactor / 3)) : 0,
+    diningH: program.livingSpaces.includes('dining') ? 2 + (program.beds >= 7 ? 1 : 0) : 0
+  };
 }
 
-async function generateAndRepair(prompt) {
-  const firstPass = await callGroq([{ role: 'user', content: prompt }]);
-  const firstJson = cleanJson(firstPass);
+function buildPublicZone(program) {
+  const rooms = [];
+  const hasDining = program.livingSpaces.includes('dining');
+  const hasGarage = program.extras.includes('garage');
+  const hasStudy = program.extras.includes('study');
+  const hasScullery = program.extras.includes('scullery');
+  const hasLaundry = program.extras.includes('laundry');
 
-  const repairPrompt = `You are a senior residential architectural reviewer.
+  const m = publicZoneMetrics(program);
 
-Review and repair this generated floor plan JSON.
+  rooms.push(room('Living room', 'living', 0, 0, m.livingW, m.livingH));
+  rooms.push(room('Kitchen', 'kitchen', m.livingW, 0, m.kitchenW, m.kitchenH));
 
-YOUR JOB:
-- Keep the same overall house concept where possible
-- Fix overlap
-- Fix bad circulation
-- Fix floating or detached en-suites
-- Fix main bathroom conflicts
-- Fix scattered secondary bedrooms
-- Fix decorative or useless passages
-- Fix unrealistic open-plan relationships
-- Fix illogical door placement
-- Fix windows on internal walls
-- Make the plan feel like a real house
+  let serviceWidth = m.kitchenW;
 
-CRITICAL REPAIR PRIORITIES:
-1. Secondary bedrooms must be organised into a wing, cluster, or passage layout
-2. En-suites must share a full wall with their bedroom
-3. Shared bathrooms must sit in shared circulation, not inside private suites
-4. Passages must be true corridors, not labels or filler strips
-5. Doors must reflect real human movement
-6. Windows must only be on external walls
-7. If a room arrangement is structurally weak, reorganise it
+  if (hasDining) {
+    rooms.push(room('Dining', 'dining', m.livingW, m.kitchenH, m.diningW, m.diningH));
+    serviceWidth = Math.max(serviceWidth, m.diningW);
+  }
 
-FINAL QUESTION:
-"Would a competent architect actually draw this?"
+  if (hasScullery) {
+    rooms.push(room('Scullery', 'scullery', m.livingW + m.kitchenW, 0, 4, 2));
+    serviceWidth = Math.max(serviceWidth, m.kitchenW + 4);
+  }
 
-If no, fix it before returning.
+  if (hasLaundry) {
+    rooms.push(room('Laundry', 'laundry', m.livingW + m.kitchenW, hasScullery ? 2 : 0, 3, 2));
+    serviceWidth = Math.max(serviceWidth, m.kitchenW + 3);
+  }
 
-Return ONLY raw JSON.
-No markdown.
-No explanation.
+  let x = m.livingW + serviceWidth;
 
-JSON TO REVIEW:
-${firstJson}`;
+  if (hasStudy) {
+    rooms.push(room('Study', 'study', x, 0, 4, 3));
+    x += 4;
+  }
 
-  const repaired = await callGroq([{ role: 'user', content: repairPrompt }]);
-  return safeParseJson(repaired);
+  rooms.push(room('Guest bath', 'bathroom', Math.max(0, x - 4), 3, 3, 2));
+
+  if (hasGarage) {
+    const garageW = program.beds >= 6 ? 7 : 6;
+    rooms.push(room('Garage', 'garage', x, 0, garageW, 6));
+  }
+
+  return rooms;
 }
+
+/* =========================
+   PRIVATE ACCESS SPACES
+========================= */
+
+function buildLanding(x, y, w = 4, h = 2) {
+  return room('Landing', 'passage', x, y, w, h);
+}
+
+function buildPrivateAccessHall(x, y, w, h = 2, label = 'Private hall') {
+  return room(label, 'passage', x, y, w, h);
+}
+
+function buildBedroomRow(names, x, y, program, includeMasterEnsuite) {
+  const rooms = [];
+  let cursorX = x;
+
+  names.forEach((name) => {
+    const isMaster = /master/i.test(name);
+
+    if (isMaster) {
+      const masterW = program.notes?.premiumMainSuite ? 6 : 5;
+      const masterH = 4;
+      rooms.push(room(name, 'room', cursorX, y, masterW, masterH));
+
+      if (includeMasterEnsuite) {
+        rooms.push(room('En-suite', 'ensuite', cursorX + masterW, y, 3, 2));
+        cursorX += masterW + 3;
+      } else {
+        cursorX += masterW;
+      }
+    } else {
+      rooms.push(room(name, 'room', cursorX, y, 4, 3));
+      cursorX += 4;
+    }
+  });
+
+  return rooms;
+}
+
+function buildSideBedroomColumn(names, x, y, program, side, includeMasterEnsuite) {
+  const rooms = [];
+  let cursorY = y;
+
+  names.forEach((name) => {
+    const isMaster = /master/i.test(name);
+
+    if (isMaster) {
+      const masterW = program.notes?.premiumMainSuite ? 6 : 5;
+      rooms.push(room(name, 'room', x, cursorY, masterW, 4));
+
+      if (includeMasterEnsuite) {
+        const ensuiteX = side === 'left' ? x + masterW : x - 3;
+        rooms.push(room('En-suite', 'ensuite', ensuiteX, cursorY, 3, 2));
+      }
+
+      cursorY += 4;
+    } else {
+      rooms.push(room(name, 'room', x, cursorY, 4, 3));
+      cursorY += 3;
+    }
+  });
+
+  return rooms;
+}
+
+function buildBathroomCluster(count, x, y) {
+  const rooms = [];
+  for (let i = 0; i < count; i++) {
+    rooms.push(room(i === 0 ? 'Main bath' : `Bathroom ${i + 1}`, 'bathroom', x + (i * 3), y, 3, 2));
+  }
+  return rooms;
+}
+
+/* =========================
+   SINGLE STOREY
+========================= */
+
+function buildSingleStorey(program) {
+  const rooms = [];
+  const publicRooms = buildPublicZone(program);
+  rooms.push(...publicRooms);
+
+  const publicBottom = maxBottom(publicRooms);
+  const publicWidth = Math.max(16, maxRight(publicRooms));
+
+  const bedroomNames = ['Master bed'];
+  for (let i = 2; i <= program.beds; i++) bedroomNames.push(`Bedroom ${i}`);
+
+  if (program.beds <= 4) {
+    const privateHall = buildPrivateAccessHall(0, publicBottom, publicWidth, 2, 'Private hall');
+    rooms.push(privateHall);
+
+    const bedRowRaw = buildBedroomRow(
+      bedroomNames,
+      0,
+      0,
+      program,
+      program.masterEnsuite
+    );
+    const bedRow = placeBlockBelow(bedRowRaw, rooms, 0, privateHall.y + privateHall.h, 1);
+    rooms.push(...bedRow);
+
+    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0));
+    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
+    const baths = placeBlockBelow(bathsRaw, rooms, 0, boundsOf(bedRow).bottom + 1, 1);
+    rooms.push(...baths);
+  } else if (program.beds <= 6) {
+    const landing = buildLanding(6, publicBottom, 4, 2);
+    rooms.push(landing);
+
+    const leftNames = [];
+    const rightNames = [];
+
+    bedroomNames.forEach((name, i) => {
+      if (i === 0 || i % 2 === 1) leftNames.push(name);
+      else rightNames.push(name);
+    });
+
+    const leftWingRaw = buildSideBedroomColumn(
+      leftNames,
+      0,
+      0,
+      program,
+      'left',
+      program.masterEnsuite
+    );
+
+    const rightWingRaw = buildSideBedroomColumn(
+      rightNames,
+      0,
+      0,
+      program,
+      'right',
+      false
+    );
+
+    const leftWing = placeBlockBelow(leftWingRaw, rooms, 0, landing.y + landing.h, 1);
+    rooms.push(...leftWing);
+
+    const leftBounds = boundsOf(leftWing);
+    const rightWing = placeBlockToRight(
+      rightWingRaw,
+      rooms,
+      leftBounds.right + 2,
+      landing.y + landing.h,
+      1
+    );
+    rooms.push(...rightWing);
+
+    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0));
+    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
+    const bathStartY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
+    const baths = placeBlockBelow(bathsRaw, rooms, 6, bathStartY, 1);
+    rooms.push(...baths);
+  } else {
+    const landing = buildLanding(8, publicBottom, 4, 2);
+    rooms.push(landing);
+
+    const leftNames = [];
+    const rightNames = [];
+    const lowerNames = [];
+
+    bedroomNames.forEach((name, i) => {
+      if (i === 0) leftNames.push(name);
+      else if (i % 3 === 1) leftNames.push(name);
+      else if (i % 3 === 2) rightNames.push(name);
+      else lowerNames.push(name);
+    });
+
+    const leftWingRaw = buildSideBedroomColumn(
+      leftNames,
+      0,
+      0,
+      program,
+      'left',
+      program.masterEnsuite
+    );
+
+    const rightWingRaw = buildSideBedroomColumn(
+      rightNames,
+      0,
+      0,
+      program,
+      'right',
+      false
+    );
+
+    const leftWing = placeBlockBelow(leftWingRaw, rooms, 0, landing.y + landing.h, 1);
+    rooms.push(...leftWing);
+
+    const rightWing = placeBlockToRight(
+      rightWingRaw,
+      rooms,
+      14,
+      landing.y + landing.h,
+      1
+    );
+    rooms.push(...rightWing);
+
+    const lowerHallY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
+    const lowerHall = buildPrivateAccessHall(
+      0,
+      lowerHallY,
+      Math.max(boundsOf(rightWing).right, 18),
+      2,
+      'Secondary hall'
+    );
+    rooms.push(lowerHall);
+
+    const lowerRowRaw = buildBedroomRow(
+      lowerNames,
+      0,
+      0,
+      program,
+      false
+    );
+
+    const lowerRow = placeBlockBelow(lowerRowRaw, rooms, 2, lowerHall.y + lowerHall.h, 1);
+    rooms.push(...lowerRow);
+
+    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0));
+    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
+    const baths = placeBlockBelow(bathsRaw, rooms, 8, boundsOf(lowerRow).bottom + 1, 1);
+    rooms.push(...baths);
+  }
+
+  const width = Math.max(publicWidth, maxRight(rooms));
+  const outdoorY = maxBottom(rooms);
+
+  if (program.extras.includes('patio')) {
+    rooms.push(room('Patio', 'patio', 0, outdoorY, width, 3));
+  }
+  if (program.extras.includes('garden')) {
+    rooms.push(room('Garden', 'garden', 0, outdoorY + (program.extras.includes('patio') ? 3 : 0), width, 5));
+  }
+
+  validateNoOverlap(rooms);
+
+  return {
+    storey: 'single',
+    desc: buildDescription(program, 'single'),
+    rooms,
+    sum: {
+      beds: countBedroomsFromRooms(rooms),
+      baths: countBathroomsFromRooms(rooms),
+      size: estimateHomeSize(program, 1),
+      floors: 1
+    }
+  };
+}
+
+/* =========================
+   DOUBLE STOREY
+========================= */
+
+function buildDoubleStorey(program) {
+  const ground = [];
+  const first = [];
+
+  const publicRooms = buildPublicZone(program);
+  ground.push(...publicRooms);
+
+  const publicBottom = maxBottom(publicRooms);
+  const stairX = Math.max(7, maxRight(publicRooms) - 2);
+  ground.push(room('Stairs', 'stairs', stairX, Math.max(2, publicBottom - 3), 2, 3));
+
+  const groundWidth = Math.max(16, maxRight(ground));
+
+  if (program.extras.includes('patio')) {
+    ground.push(room('Patio', 'patio', 0, maxBottom(ground), groundWidth, 3));
+  }
+  if (program.extras.includes('garden')) {
+    ground.push(room('Garden', 'garden', 0, maxBottom(ground), groundWidth, 5));
+  }
+
+  const landing = buildLanding(6, 0, 4, 2);
+  first.push(landing);
+  first.push(room('Stairs', 'stairs', 6, 2, 2, 3));
+
+  const bedroomNames = ['Master bed'];
+  for (let i = 2; i <= program.beds; i++) bedroomNames.push(`Bedroom ${i}`);
+
+  if (program.beds <= 5) {
+    const leftNames = bedroomNames.filter((_, i) => i % 2 === 0);
+    const rightNames = bedroomNames.filter((_, i) => i % 2 === 1);
+
+    const leftWingRaw = buildSideBedroomColumn(leftNames, 0, 0, program, 'left', false);
+    const rightWingRaw = buildSideBedroomColumn(rightNames, 0, 0, program, 'right', true);
+
+    const leftWing = placeBlockBelow(leftWingRaw, first, 0, landing.y + landing.h, 1);
+    first.push(...leftWing);
+
+    const rightWing = placeBlockToRight(rightWingRaw, first, 10, landing.y + landing.h, 1);
+    first.push(...rightWing);
+
+    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0) - 1);
+    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
+    const bathY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
+    const baths = placeBlockBelow(bathsRaw, first, 6, bathY, 1);
+    first.push(...baths);
+  } else {
+    const leftNames = [];
+    const rightNames = [];
+    const lowerNames = [];
+
+    bedroomNames.forEach((name, i) => {
+      if (i === 0) rightNames.push(name);
+      else if (i % 3 === 1) leftNames.push(name);
+      else if (i % 3 === 2) rightNames.push(name);
+      else lowerNames.push(name);
+    });
+
+    const leftWingRaw = buildSideBedroomColumn(leftNames, 0, 0, program, 'left', false);
+    const rightWingRaw = buildSideBedroomColumn(rightNames, 0, 0, program, 'right', true);
+
+    const leftWing = placeBlockBelow(leftWingRaw, first, 0, landing.y + landing.h, 1);
+    first.push(...leftWing);
+
+    const rightWing = placeBlockToRight(rightWingRaw, first, 14, landing.y + landing.h, 1);
+    first.push(...rightWing);
+
+    const lowerHallY = Math.max(boundsOf(leftWing).bottom, boundsOf(rightWing).bottom) + 1;
+    const lowerHall = buildPrivateAccessHall(2, lowerHallY, 16, 2, 'Upper hall');
+    first.push(lowerHall);
+
+    const lowerRowRaw = buildBedroomRow(lowerNames, 0, 0, program, false);
+    const lowerRow = placeBlockBelow(lowerRowRaw, first, 4, lowerHall.y + lowerHall.h, 1);
+    first.push(...lowerRow);
+
+    const bathsNeeded = Math.max(1, program.baths - (program.masterEnsuite ? 1 : 0) - 1);
+    const bathsRaw = buildBathroomCluster(bathsNeeded, 0, 0);
+    const baths = placeBlockBelow(bathsRaw, first, 8, boundsOf(lowerRow).bottom + 1, 1);
+    first.push(...baths);
+  }
+
+  validateNoOverlap(ground);
+  validateNoOverlap(first);
+
+  return {
+    storey: 'double',
+    desc: buildDescription(program, 'double'),
+    ground,
+    first,
+    sum: {
+      beds: countBedroomsFromRooms([...ground, ...first]),
+      baths: countBathroomsFromRooms([...ground, ...first]),
+      size: estimateHomeSize(program, 2),
+      floors: 2
+    }
+  };
+}
+
+/* =========================
+   ACCESS VALIDATION
+========================= */
+
+function buildAdjacencyGraph(rooms) {
+  const graph = new Map();
+  rooms.forEach(r => graph.set(r.name, new Set()));
+
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      if (shareEdge(rooms[i], rooms[j])) {
+        graph.get(rooms[i].name).add(rooms[j].name);
+        graph.get(rooms[j].name).add(rooms[i].name);
+      }
+    }
+  }
+
+  return graph;
+}
+
+function accessibleWithoutCrossingBedrooms(rooms, startNames, targetName) {
+  const graph = buildAdjacencyGraph(rooms);
+  const roomMap = new Map(rooms.map(r => [r.name, r]));
+  const queue = [...startNames];
+  const visited = new Set(queue);
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (current === targetName) return true;
+
+    for (const next of graph.get(current) || []) {
+      if (visited.has(next)) continue;
+      const r = roomMap.get(next);
+      if (!r) continue;
+
+      const isTarget = next === targetName;
+      const blocked = r.t === 'room' && !isTarget;
+
+      if (blocked) continue;
+
+      visited.add(next);
+      queue.push(next);
+    }
+  }
+
+  return false;
+}
+
+function validateIndependentAccessSingle(rooms) {
+  const bedrooms = rooms.filter(r => r.t === 'room');
+  const starts = rooms
+    .filter(r => ['living', 'dining', 'kitchen', 'passage', 'stairs'].includes(r.t))
+    .map(r => r.name);
+
+  for (const bedroom of bedrooms) {
+    if (!accessibleWithoutCrossingBedrooms(rooms, starts, bedroom.name)) {
+      throw new Error(`${bedroom.name} does not have independent access`);
+    }
+  }
+}
+
+function validateIndependentAccessDouble(_ground, first) {
+  const firstBedrooms = first.filter(r => r.t === 'room');
+  const starts = first
+    .filter(r => r.t === 'passage' || r.t === 'stairs')
+    .map(r => r.name);
+
+  for (const bedroom of firstBedrooms) {
+    if (!accessibleWithoutCrossingBedrooms(first, starts, bedroom.name)) {
+      throw new Error(`${bedroom.name} does not have independent upstairs access`);
+    }
+  }
+}
+
+/* =========================
+   DOORS AND WINDOWS
+========================= */
+
+function isRoomInterior(t) {
+  return !['garden', 'patio'].includes(t);
+}
+
+function hasAdjacentRoom(rooms, roomObj, side) {
+  return rooms.some(other => {
+    if (other === roomObj) return false;
+    if (!isRoomInterior(other.t)) return false;
+
+    if (side === 'top') {
+      return other.y + other.h === roomObj.y &&
+        rangesOverlap(roomObj.x, roomObj.x + roomObj.w, other.x, other.x + other.w);
+    }
+    if (side === 'bottom') {
+      return other.y === roomObj.y + roomObj.h &&
+        rangesOverlap(roomObj.x, roomObj.x + roomObj.w, other.x, other.x + other.w);
+    }
+    if (side === 'left') {
+      return other.x + other.w === roomObj.x &&
+        rangesOverlap(roomObj.y, roomObj.y + roomObj.h, other.y, other.y + other.h);
+    }
+    if (side === 'right') {
+      return other.x === roomObj.x + roomObj.w &&
+        rangesOverlap(roomObj.y, roomObj.y + roomObj.h, other.y, other.y + other.h);
+    }
+
+    return false;
+  });
+}
+
+function sharedSideBetweenRooms(a, b) {
+  if (a.x + a.w === b.x && rangesOverlap(a.y, a.y + a.h, b.y, b.y + b.h)) {
+    const start = Math.max(a.y, b.y);
+    const end = Math.min(a.y + a.h, b.y + b.h);
+    return { sideA: 'right', x: a.x + a.w, y: start + Math.max(0.5, (end - start) / 2 - 0.5), width: 1 };
+  }
+  if (b.x + b.w === a.x && rangesOverlap(a.y, a.y + a.h, b.y, b.y + b.h)) {
+    const start = Math.max(a.y, b.y);
+    const end = Math.min(a.y + a.h, b.y + b.h);
+    return { sideA: 'left', x: a.x, y: start + Math.max(0.5, (end - start) / 2 - 0.5), width: 1 };
+  }
+  if (a.y + a.h === b.y && rangesOverlap(a.x, a.x + a.w, b.x, b.x + b.w)) {
+    const start = Math.max(a.x, b.x);
+    const end = Math.min(a.x + a.w, b.x + b.w);
+    return { sideA: 'bottom', x: start + Math.max(0.5, (end - start) / 2 - 0.5), y: a.y + a.h, width: 1 };
+  }
+  if (b.y + b.h === a.y && rangesOverlap(a.x, a.x + a.w, b.x, b.x + b.w)) {
+    const start = Math.max(a.x, b.x);
+    const end = Math.min(a.x + a.w, b.x + b.w);
+    return { sideA: 'top', x: start + Math.max(0.5, (end - start) / 2 - 0.5), y: a.y, width: 1 };
+  }
+  return null;
+}
+
+function generateInteriorDoorsForFloor(rooms) {
+  const doors = [];
+  const accessTypes = new Set(['passage', 'living', 'dining', 'kitchen', 'stairs']);
+
+  rooms.forEach(a => {
+    if (!accessTypes.has(a.t)) return;
+
+    rooms.forEach(b => {
+      if (a === b) return;
+      if (!['room', 'bathroom', 'ensuite', 'study', 'garage', 'kitchen', 'living', 'dining', 'scullery', 'laundry', 'stairs'].includes(b.t)) return;
+
+      const shared = sharedSideBetweenRooms(a, b);
+      if (!shared) return;
+
+      doors.push({
+        from: a.name,
+        to: b.name,
+        x: shared.x,
+        y: shared.y,
+        width: 1,
+        side: shared.sideA
+      });
+    });
+  });
+
+  return dedupeDoors(doors);
+}
+
+function generateExteriorDoorsForFloor(rooms) {
+  const doors = [];
+  const priorities = ['living', 'dining', 'kitchen', 'garage'];
+
+  priorities.forEach(type => {
+    const r = rooms.find(x => x.t === type);
+    if (!r) return;
+
+    if (!hasAdjacentRoom(rooms, r, 'bottom')) {
+      doors.push({
+        from: r.name,
+        to: 'exterior',
+        x: r.x + Math.max(1, Math.floor(r.w / 2) - 0.5),
+        y: r.y + r.h,
+        width: 1,
+        side: 'bottom'
+      });
+      return;
+    }
+
+    if (!hasAdjacentRoom(rooms, r, 'right')) {
+      doors.push({
+        from: r.name,
+        to: 'exterior',
+        x: r.x + r.w,
+        y: r.y + Math.max(1, Math.floor(r.h / 2) - 0.5),
+        width: 1,
+        side: 'right'
+      });
+    }
+  });
+
+  return dedupeDoors(doors);
+}
+
+function generateWindowsForFloor(rooms) {
+  const windows = [];
+
+  rooms.forEach(r => {
+    if (!isRoomInterior(r.t) || r.t === 'passage') return;
+
+    ['top', 'bottom', 'left', 'right'].forEach(side => {
+      if (hasAdjacentRoom(rooms, r, side)) return;
+
+      if (side === 'top' || side === 'bottom') {
+        if (r.w < 2) return;
+        const width = Math.min(2, r.w - 1);
+        windows.push({
+          room: r.name,
+          side,
+          x: r.x + Math.max(0.5, (r.w - width) / 2),
+          y: side === 'top' ? r.y : r.y + r.h,
+          width
+        });
+      } else {
+        if (r.h < 2) return;
+        const width = Math.min(2, r.h - 1);
+        windows.push({
+          room: r.name,
+          side,
+          x: side === 'left' ? r.x : r.x + r.w,
+          y: r.y + Math.max(0.5, (r.h - width) / 2),
+          width
+        });
+      }
+    });
+  });
+
+  return dedupeWindows(windows);
+}
+
+function dedupeDoors(doors) {
+  const seen = new Set();
+  return doors.filter(d => {
+    const key = `${d.from}|${d.to}|${d.x}|${d.y}|${d.side}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeWindows(windows) {
+  const seen = new Set();
+  return windows.filter(w => {
+    const key = `${w.room}|${w.side}|${w.x}|${w.y}|${w.width}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function attachDoorsAndWindows(plan) {
+  if (plan.storey === 'single') {
+    return {
+      ...plan,
+      doors: [
+        ...generateInteriorDoorsForFloor(plan.rooms),
+        ...generateExteriorDoorsForFloor(plan.rooms)
+      ],
+      windows: generateWindowsForFloor(plan.rooms)
+    };
+  }
+
+  return {
+    ...plan,
+    doors: [
+      ...generateInteriorDoorsForFloor(plan.ground),
+      ...generateExteriorDoorsForFloor(plan.ground),
+      ...generateInteriorDoorsForFloor(plan.first)
+    ],
+    windows: [
+      ...generateWindowsForFloor(plan.ground),
+      ...generateWindowsForFloor(plan.first)
+    ]
+  };
+}
+
+/* =========================
+   FULL VALIDATION
+========================= */
+
+function validatePlan(plan) {
+  const errors = [];
+
+  if (!plan || typeof plan !== 'object') errors.push('Plan is invalid');
+  if (!plan.desc || typeof plan.desc !== 'string') errors.push('Missing description');
+  if (!plan.sum || typeof plan.sum !== 'object') errors.push('Missing summary');
+  if (!plan.storey) errors.push('Missing storey');
+
+  const allRooms = plan.storey === 'double'
+    ? [...(plan.ground || []), ...(plan.first || [])]
+    : (plan.rooms || []);
+
+  if (!Array.isArray(allRooms) || allRooms.length === 0) {
+    errors.push('No rooms returned');
+    return errors;
+  }
+
+  for (const r of allRooms) {
+    if (typeof r.name !== 'string') errors.push('Room missing name');
+    if (typeof r.t !== 'string') errors.push(`Room ${r.name || ''} missing type`);
+    if (![r.x, r.y, r.w, r.h].every(v => typeof v === 'number')) {
+      errors.push(`Room ${r.name || ''} has invalid geometry`);
+      continue;
+    }
+    if (r.w <= 0 || r.h <= 0) errors.push(`Room ${r.name} has invalid dimensions`);
+
+    if (r.t === 'room') {
+      if (/master/i.test(r.name) && area(r.w, r.h) < 16) errors.push(`Master bedroom too small: ${r.name}`);
+      if (!/master/i.test(r.name) && area(r.w, r.h) < 9) errors.push(`Bedroom too small: ${r.name}`);
+    }
+    if ((r.t === 'bathroom' || r.t === 'ensuite') && area(r.w, r.h) < 4) {
+      errors.push(`Bathroom too small: ${r.name}`);
+    }
+    if (r.t === 'kitchen' && area(r.w, r.h) < 6) {
+      errors.push('Kitchen too small');
+    }
+  }
+
+  try {
+    if (plan.storey === 'double') {
+      validateNoOverlap(plan.ground || []);
+      validateNoOverlap(plan.first || []);
+      validateIndependentAccessDouble(plan.ground || [], plan.first || []);
+    } else {
+      validateNoOverlap(plan.rooms || []);
+      validateIndependentAccessSingle(plan.rooms || []);
+    }
+  } catch (err) {
+    errors.push(err.message);
+  }
+
+  return errors;
+}
+
+/* =========================
+   MAIN BUILDER
+========================= */
+
+function buildPlanDeterministically(program) {
+  const storey = chooseStorey(program);
+  const basePlan = storey === 'double' ? buildDoubleStorey(program) : buildSingleStorey(program);
+  return attachDoorsAndWindows(basePlan);
+}
+
+/* =========================
+   ENDPOINTS
+========================= */
 
 app.post('/ask', async (req, res) => {
   const { description } = req.body;
@@ -96,29 +1107,21 @@ app.post('/ask', async (req, res) => {
   try {
     const text = await callGroq([{
       role: 'user',
-      content: `You are a friendly South African architect assistant.
+      content: `You are a friendly South African architect assistant. A client just said: "${description}".
 
-A client said:
-"${description}"
+Ask them exactly 4 short clarifying questions to better understand their needs before designing their floor plan.
 
-Ask exactly 4 short, useful clarifying questions before designing the floor plan.
+The questions should cover things you dont know yet from their description such as:
+- Number of bedrooms or bathrooms if not mentioned
+- Single or double storey
+- Do they need a garage or carport
+- Any special rooms like study, scullery, outside room, laundry
+- Plot size or any site constraints
+- Budget tier (basic, mid-range, luxury)
+- Garden size or outdoor entertainment area needs
 
-Your questions should cover the most important missing items, such as:
-- number of bedrooms or bathrooms
-- single or double storey
-- garage or carport
-- study, scullery, laundry, staff room, outside room
-- plot size or site limitations
-- budget level
-- patio, braai, garden, entertainment needs
-
-RULES:
-- Write one short friendly intro sentence
-- Then write exactly 4 numbered questions
-- Keep it conversational
-- Keep it short
-- Do NOT generate a floor plan yet`
-    }]);
+Format your response as a friendly short intro sentence then exactly 4 questions numbered 1 to 4. Keep it conversational and South African. Do not generate a floor plan yet.`
+    }], 0.3);
 
     res.json({ questions: text });
   } catch (err) {
@@ -129,268 +1132,25 @@ RULES:
 
 app.post('/generate', async (req, res) => {
   const { description, answers, style, size } = req.body;
-
-  const fullContext = `Original description: ${description}\nClient answers: ${answers || 'None provided'}`;
-
-  const isDouble =
-    (description || '').toLowerCase().includes('double') ||
-    (description || '').toLowerCase().includes('2 stor') ||
-    (description || '').toLowerCase().includes('two stor') ||
-    ((answers || '').toLowerCase().includes('double')) ||
-    ((answers || '').toLowerCase().includes('2 stor')) ||
-    ((answers || '').toLowerCase().includes('two stor'));
-
-  const prompt = `You are a highly experienced South African residential architect and spatial planner.
-
-Your task is to generate a realistic, buildable residential floor plan that feels like a real home, not a random box layout.
-
-CLIENT BRIEF:
-${fullContext}
-
-Style preference: ${style}
-Size preference: ${size}
-
-CORE GOAL:
-Create a practical, elegant, realistic floor plan with sensible circulation, privacy, room grouping, bathroom logic, door placement, and window placement.
-
-ABSOLUTE PRIORITIES:
-- The plan must feel like a real house someone would actually build
-- Do not place rooms randomly
-- Do not return decorative geometry pretending to be circulation
-- Do not create floating bathroom blocks, floating en-suites, or isolated bedrooms
-- No overlaps under any circumstances
-- The whole plan must be organised around one clear structural layout pattern
-
-STRUCTURAL LAYOUT RULE (CRITICAL):
-Before placing rooms, you MUST choose exactly ONE layout strategy and build the whole plan around it.
-
-Allowed layout strategies:
-1. CENTRAL PASSAGE LAYOUT
-- One main passage
-- Bedrooms branch off the passage
-- Shared bathrooms connect to the passage
-- Master bedroom sits at one end or in the most private position
-
-2. BEDROOM WING LAYOUT
-- Public zone and private zone clearly separated
-- Bedrooms grouped together in one private wing
-- One clear circulation spine through the wing
-- Shared bathrooms sit inside the bedroom wing
-
-3. CLUSTERED FAMILY LAYOUT
-- Bedrooms grouped in logical clusters
-- One shared circulation route connects the clusters
-- Master bedroom is separated for privacy
-
-YOU MUST:
-- Pick one of these patterns first
-- Place all rooms according to that pattern
-- Keep the structure clear and readable
-- NEVER scatter bedrooms across unrelated positions
-
-ZONING RULES:
-- Public zone: living, dining, kitchen, patio
-- Private zone: bedrooms, en-suites, main/shared bathroom
-- Service zone: garage, scullery, laundry, guest bathroom
-- Public, private, and service zones must be clearly separated
-- Bedrooms must never feel mixed into public spaces
-- Garage must never sit next to bedrooms or study
-- Study must sit in a quiet zone, never beside garage
-- Patio and garden must remain at the bottom of the plan
-
-BEDROOM ORGANISATION RULE:
-- All secondary bedrooms must be grouped into a logical cluster or wing
-- Secondary bedrooms must share a common access path
-- Avoid scattering bedrooms individually around the plan
-- Master bedroom must be the most private bedroom
-- Master bedroom should not be the main access route to anything else
-
-EN-SUITE ATTACHMENT RULE (CRITICAL):
-- Every en-suite must share a full wall with its bedroom
-- Every en-suite must be directly accessible from its bedroom only
-- An en-suite must feel like an extension of its bedroom, not a detached box
-- If this cannot be satisfied cleanly, do NOT include the en-suite
-- En-suites must never overlap or visually merge with shared bathrooms
-
-MAIN BATHROOM RULE:
-- Main/shared bathroom must be separate from all en-suites
-- Main/shared bathroom must be accessed from passage or shared circulation
-- Main/shared bathroom must not sit inside master suite
-- Main/shared bathroom should serve secondary bedrooms logically
-- If multiple shared bathrooms exist, each must have a clear purpose
-
-PASSAGE RULE (CRITICAL):
-- Passage type is for real circulation only
-- A passage must connect at least 3 meaningful destinations, OR 2 rooms while acting as a true corridor between zones
-- If a passage does not serve a real movement purpose, remove it
-- Do not create decorative or token passages
-- Do not create random thin strips labelled as passage
-- Bedroom wings should preferably have one clear organising passage
-
-OPEN-PLAN RULE:
-- Open plan does NOT mean shapeless empty space
-- Living, dining, and kitchen must still read as separate functional zones
-- Dining should sit naturally between or beside kitchen and living
-- Avoid awkward leftover voids
-- Open-plan spaces must not block private circulation
-
-DOOR RULES:
-- Doors must follow realistic movement paths
-- Every bedroom must have one logical entry door
-- Every en-suite must open only from its bedroom
-- Every shared bathroom must open to passage or shared circulation
-- Kitchen should connect logically to dining/living and optionally scullery
-- Garage should connect to service/public circulation, not directly to bedroom
-- Doors may only exist between touching rooms or room-to-exterior
-- Do not place doors on walls where the two spaces do not touch
-- Do not create unusable door positions in corners
-- Do not create nonsense door conflicts
-
-WINDOW RULES:
-- Windows must only be placed on exterior walls
-- Bedrooms must have at least one exterior window
-- Living room should have generous exterior windows
-- Kitchen should have at least one exterior window if possible
-- Bathrooms and en-suites should have a small exterior window if possible
-- Never place a window on an internal shared wall
-
-SPACE PLANNING RULES:
-- Kitchen must connect naturally to dining and living
-- Scullery must sit directly next to kitchen only
-- Guest bathroom must be accessible from public zone
-- Study should sit near quiet/private edge or controlled public edge
-- Bedrooms should be separated from noisy social spaces
-- Avoid dead ends and wasted corners
-- Avoid tiny leftover spaces between rooms
-
-${isDouble ? `
-THIS IS A DOUBLE STOREY HOME. RETURN TWO FLOOR PLANS.
-
-DOUBLE STOREY RULES:
-- Ground floor contains only public/service spaces: living, dining, kitchen, scullery, guest bathroom, garage, study, patio, garden, stairs
-- First floor contains private spaces: bedrooms, en-suites, main bathroom, passage, stairs
-- No bedrooms on ground floor
-- No kitchen or living room on first floor
-- Stairs must exist on both floors at identical x and y
-- Stairs type must be "stairs"
-- Stairs size exactly 2 wide by 3 deep
-- First floor must use one clear bedroom organisation pattern
-- Master bedroom should be furthest from stairs where practical
-` : `
-THIS IS A SINGLE STOREY HOME. RETURN ONE FLOOR PLAN.
-
-SINGLE STOREY RULES:
-- Public spaces should sit in the upper portion of the plan
-- Private bedroom zone should sit below
-- Use one clear bedroom wing, central passage, or clustered family layout
-- Patio and garden must be at the bottom
-`}
-
-TECHNICAL RULES:
-- Room types allowed: room, passage, bathroom, ensuite, kitchen, living, dining, garage, study, garden, patio, scullery, laundry, stairs
-- 1 grid unit = 1 metre
-- All rooms must align to the grid
-- Rooms must not overlap
-- Avoid duplicate room names unless numbered
-- Every room must have practical proportions
-- Avoid thin, awkward, or unusable rooms
-
-MINIMUM ROOM SIZES:
-- Bedroom minimum 3x4
-- Master bedroom minimum 5x5
-- En-suite minimum 2x3
-- Bathroom minimum 2x3
-- Kitchen minimum 4x4
-- Living room minimum 6x5
-- Study minimum 3x3
-- Garage minimum 6x6 double or 3x6 single
-- Stairs exactly 2x3
-- Passage minimum 1m wide
-
-OUTPUT REQUIREMENTS:
-- Return realistic room coordinates
-- Return sensible room relationships
-- Return a "doors" array
-- Return a "windows" array
-- Each door must reference two touching rooms or a room and "exterior"
-- Each window must reference one room and one exterior side
-- Exterior side must be one of: top, right, bottom, left
-
-DOOR FORMAT:
-{"from":"Bedroom 2","to":"Passage","side":"top","x":4,"y":10,"width":1}
-
-WINDOW FORMAT:
-{"room":"Living room","side":"bottom","x":3,"y":5,"width":2}
-
-FINAL SANITY CHECK (CRITICAL):
-Before returning, ask:
-"Does this feel like a real house a human architect would design?"
-
-If the answer is NO:
-- reorganise the layout completely
-- prioritise structure over symmetry
-- fix circulation, bathroom logic, room grouping, and access before returning
-
-VALIDATION CHECKLIST BEFORE YOU RETURN:
-1. No overlaps
-2. Secondary bedrooms are grouped logically
-3. En-suites are attached properly to their bedrooms
-4. Main/shared bathrooms are separate from en-suites
-5. Passages are meaningful and not decorative
-6. Doors only connect touching spaces
-7. Windows only sit on exterior walls
-8. Public/private/service zones are clear
-9. Open-plan spaces still have functional zoning
-10. The plan feels like a real house, not random boxes
-
-${isDouble ? `
-RETURN EXACTLY THIS JSON SHAPE:
-{
-  "desc":"one sentence summary",
-  "storey":"double",
-  "ground":[
-    {"name":"Living room","t":"living","x":0,"y":0,"w":8,"h":5}
-  ],
-  "first":[
-    {"name":"Passage","t":"passage","x":0,"y":0,"w":10,"h":1}
-  ],
-  "doors":[
-    {"from":"Bedroom 2","to":"Passage","side":"top","x":4,"y":10,"width":1}
-  ],
-  "windows":[
-    {"room":"Living room","side":"bottom","x":3,"y":5,"width":2}
-  ],
-  "sum":{"beds":4,"baths":3,"size":"~240m²","floors":2}
-}
-` : `
-RETURN EXACTLY THIS JSON SHAPE:
-{
-  "desc":"one sentence summary",
-  "storey":"single",
-  "rooms":[
-    {"name":"Living room","t":"living","x":0,"y":0,"w":7,"h":5}
-  ],
-  "doors":[
-    {"from":"Bedroom 2","to":"Passage","side":"top","x":4,"y":10,"width":1}
-  ],
-  "windows":[
-    {"room":"Living room","side":"bottom","x":3,"y":5,"width":2}
-  ],
-  "sum":{"beds":4,"baths":3,"size":"~180m²","floors":1}
-}
-`}
-
-CRITICAL:
-- Return raw JSON only
-- No markdown
-- No explanation
-- No text before or after JSON
-- If the layout looks awkward, fix it before returning
-- Prioritise realism over symmetry`;
+  const fullContext = `Original description: ${description}\nClient answers: ${answers}`;
 
   try {
-    const json = await generateAndRepair(prompt);
-    res.json(json);
+    const program = await generateProgram(fullContext, style, size);
+    const plan = buildPlanDeterministically(program);
+    const errors = validatePlan(plan);
+
+    if (errors.length > 0) {
+      return res.status(422).json({
+        error: 'Generated plan failed validation',
+        validationErrors: errors,
+        program
+      });
+    }
+
+    res.json({
+      ...plan,
+      program
+    });
   } catch (err) {
     console.error('GENERATE ERROR:', err.message);
     res.status(500).json({ error: err.message });
@@ -398,117 +1158,49 @@ CRITICAL:
 });
 
 app.post('/revise', async (req, res) => {
-  const { currentRooms, request, description, isDoubleStorey, currentDoors, currentWindows } = req.body;
+  const { request, description, currentProgram } = req.body;
 
-  const currentPlanStr = isDoubleStorey
-    ? `Ground floor:\n${JSON.stringify(currentRooms?.ground || [], null, 2)}\n\nFirst floor:\n${JSON.stringify(currentRooms?.first || [], null, 2)}`
-    : JSON.stringify(currentRooms || [], null, 2);
-
-  const prompt = `You are a highly experienced South African residential architect.
-
-A client wants to revise their existing floor plan. Apply their requested change carefully and intelligently.
-
-ORIGINAL BRIEF:
-${description}
-
-CLIENT REVISION REQUEST:
-"${request}"
-
-CURRENT FLOOR PLAN:
-${currentPlanStr}
-
-CURRENT DOORS:
-${JSON.stringify(currentDoors || [], null, 2)}
-
-CURRENT WINDOWS:
-${JSON.stringify(currentWindows || [], null, 2)}
-
-REVISION GOAL:
-Make only the requested changes while preserving the rest of the plan as much as possible.
-
-REVISION RULES:
-- Only change what the client asked to change
-- Keep the overall structure stable where possible
-- Preserve the chosen layout pattern unless the requested change forces a reorganisation
-- Secondary bedrooms must remain grouped logically
-- En-suites must remain attached to their bedroom by a full shared wall
-- Main/shared bathrooms must remain separate from en-suites
-- Passages must remain meaningful, not decorative
-- Garage must stay isolated from bedrooms and study
-- Study must never sit next to garage
-- Scullery must stay next to kitchen
-- Doors must still reflect real movement
-- Windows must remain on exterior walls only
-- Garden and patio remain at the bottom
-- If double storey, stairs must remain on both floors at identical x and y
-
-If the requested change breaks the layout, intelligently reorganise the affected zone while keeping the rest as consistent as possible.
-
-DOOR RULES:
-- Doors may only exist between touching rooms or room-to-exterior
-- En-suite door must connect only to its bedroom
-- Main bathroom must connect to circulation or shared access
-- Do not create nonsensical direct bedroom-to-living access unless clearly requested
-
-WINDOW RULES:
-- Windows only on exterior walls
-- Bedrooms should keep at least one exterior window
-- Living room should keep strong external light where possible
-- Bathrooms should keep small external windows where possible
-
-TECHNICAL RULES:
-- Room types allowed: room, passage, bathroom, ensuite, kitchen, living, dining, garage, study, garden, patio, scullery, laundry, stairs
-- Rooms must NOT overlap
-- 1 grid unit = 1 metre
-- Stairs exactly 2x3
-
-${isDoubleStorey ? `
-RETURN EXACTLY THIS JSON SHAPE:
-{
-  "desc":"one sentence describing what changed and why",
-  "storey":"double",
-  "ground":[...],
-  "first":[...],
-  "doors":[...],
-  "windows":[...],
-  "sum":{"beds":4,"baths":3,"size":"~240m²","floors":2}
-}
-` : `
-RETURN EXACTLY THIS JSON SHAPE:
-{
-  "desc":"one sentence describing what changed and why",
-  "storey":"single",
-  "rooms":[...],
-  "doors":[...],
-  "windows":[...],
-  "sum":{"beds":4,"baths":3,"size":"~180m²","floors":1}
-}
-`}
-
-VALIDATION CHECKLIST:
-1. No overlaps
-2. Bathrooms and en-suites separated correctly
-3. Doors only where spaces touch
-4. Windows only on exterior walls
-5. Circulation still works
-6. Requested change has actually been applied
-7. Plan still feels realistic
-
-CRITICAL:
-- Return ONLY raw JSON
-- No markdown
-- No explanation
-- No text outside JSON`;
+  if (!request) {
+    return res.status(400).json({ error: 'Missing revision request' });
+  }
 
   try {
-    const json = await generateAndRepair(prompt);
-    res.json(json);
+    const baseProgram = currentProgram && typeof currentProgram === 'object'
+      ? currentProgram
+      : {
+          storeyPreference: 'either',
+          beds: 3,
+          baths: 2,
+          livingSpaces: ['living', 'dining', 'kitchen'],
+          extras: ['patio', 'garden'],
+          masterEnsuite: true,
+          notes: { openPlan: true, entertainmentFocus: false, premiumMainSuite: false },
+          sizeBand: 'medium'
+        };
+
+    const revisedProgram = await reviseProgram(baseProgram, request, description || '');
+    const revisedPlan = buildPlanDeterministically(revisedProgram);
+    const errors = validatePlan(revisedPlan);
+
+    if (errors.length > 0) {
+      return res.status(422).json({
+        error: 'Revised plan failed validation',
+        validationErrors: errors,
+        program: revisedProgram
+      });
+    }
+
+    res.json({
+      ...revisedPlan,
+      program: revisedProgram
+    });
   } catch (err) {
     console.error('REVISE ERROR:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(3000, () => {
-  console.log('ArchAI backend running on http://localhost:3000');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`ArchAI backend running on port ${PORT}`);
 });
