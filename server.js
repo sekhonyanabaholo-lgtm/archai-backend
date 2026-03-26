@@ -12,10 +12,22 @@ if (!GROQ_KEY) {
 }
 
 /* =========================
+   BASIC ROUTES
+========================= */
+
+app.get('/', (_req, res) => {
+  res.send('ArchAI backend is live');
+});
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true });
+});
+
+/* =========================
    AI HELPERS
 ========================= */
 
-async function callGroq(messages, temperature = 0.2) {
+async function callGroq(messages, temperature = 0.2, max_tokens = 1600) {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -25,7 +37,7 @@ async function callGroq(messages, temperature = 0.2) {
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages,
-      max_tokens: 1400,
+      max_tokens,
       temperature
     })
   });
@@ -37,7 +49,9 @@ async function callGroq(messages, temperature = 0.2) {
   }
 
   const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error('No content returned from Groq');
+  if (!content) {
+    throw new Error('No content returned from Groq');
+  }
 
   return content.trim();
 }
@@ -184,7 +198,7 @@ Rules:
 }
 
 /* =========================
-   GEOMETRY + BASIC HELPERS
+   GEOMETRY HELPERS
 ========================= */
 
 function room(name, t, x, y, w, h) {
@@ -288,21 +302,6 @@ function countBathroomsFromRooms(rooms) {
   return rooms.filter(r => r.t === 'bathroom' || r.t === 'ensuite').length;
 }
 
-function validateNoOverlap(rooms) {
-  for (let i = 0; i < rooms.length; i++) {
-    for (let j = i + 1; j < rooms.length; j++) {
-      const a = rooms[i];
-      const b = rooms[j];
-      if (a.t === 'garden' || a.t === 'patio' || b.t === 'garden' || b.t === 'patio') continue;
-      if (rectsOverlap(a, b)) {
-        throw new Error(
-          `Overlap detected between "${a.name}" (${a.x},${a.y},${a.w},${a.h}) and "${b.name}" (${b.x},${b.y},${b.w},${b.h})`
-        );
-      }
-    }
-  }
-}
-
 function estimateHomeSize(program, floors) {
   const bedArea = program.beds * 14;
   const bathArea = program.baths * 5;
@@ -334,14 +333,8 @@ function chooseStorey(program) {
 function chooseArchetype(program) {
   const storey = chooseStorey(program);
 
-  if (storey === 'double') {
-    return 'double_central_core';
-  }
-
-  if (program.beds <= 5) {
-    return 'single_central_great_room';
-  }
-
+  if (storey === 'double') return 'double_central_core';
+  if (program.beds <= 5) return 'single_central_great_room';
   return 'single_central_great_room_large';
 }
 
@@ -416,8 +409,7 @@ function validateIndependentAccessSingle(rooms) {
   }
 }
 
-function validateIndependentAccessDouble(ground, first) {
-  void ground;
+function validateIndependentAccessDouble(_ground, first) {
   const bedrooms = first.filter(r => r.t === 'room');
   const starts = first
     .filter(r => ['passage', 'stairs'].includes(r.t))
@@ -435,17 +427,13 @@ function validateIndependentAccessDouble(ground, first) {
 ========================= */
 
 function buildFoyerBlock() {
-  return [
-    room('Foyer', 'passage', 0, 0, 4, 3)
-  ];
+  return [room('Foyer', 'passage', 0, 0, 4, 3)];
 }
 
 function buildGreatRoomBlock(program) {
   const w = program.beds >= 6 ? 8 : 7;
   const h = program.beds >= 6 ? 6 : 5;
-  return [
-    room('Great room', 'living', 0, 0, w, h)
-  ];
+  return [room('Great room', 'living', 0, 0, w, h)];
 }
 
 function buildKitchenDiningBlock(program) {
@@ -492,9 +480,8 @@ function buildGarageServiceBlock(program) {
 function buildMasterSuiteBlock(program) {
   const rooms = [];
   const masterW = program.notes?.premiumMainSuite ? 6 : 5;
-  const masterH = 4;
 
-  rooms.push(room('Master bed', 'room', 0, 0, masterW, masterH));
+  rooms.push(room('Master bed', 'room', 0, 0, masterW, 4));
 
   if (program.masterEnsuite) {
     rooms.push(room('En-suite', 'ensuite', masterW, 0, 3, 2));
@@ -546,7 +533,7 @@ function buildUpperBedroomCluster(program, names, includeMaster) {
 }
 
 /* =========================
-   SINGLE STOREY ARCHETYPE
+   ARCHETYPE BUILDERS
 ========================= */
 
 function buildSingleCentralGreatRoom(program) {
@@ -597,8 +584,6 @@ function buildSingleCentralGreatRoom(program) {
     rooms.push(room('Garden', 'garden', 0, outdoorY + (program.extras.includes('patio') ? 3 : 0), width, 5));
   }
 
-  validateNoOverlap(rooms);
-
   return {
     storey: 'single',
     desc: buildDescription(program, 'single', 'single_central_great_room'),
@@ -633,6 +618,7 @@ function buildSingleCentralGreatRoomLarge(program) {
     { ...program, baths: Math.max(1, Math.ceil((program.baths - (program.masterEnsuite ? 1 : 0)) / 2)) },
     secondaryNamesA.length
   );
+
   const wingB = buildSecondaryBedroomWing(
     { ...program, baths: Math.max(1, Math.floor((program.baths - (program.masterEnsuite ? 1 : 0)) / 2) || 1) },
     secondaryNamesB.length
@@ -683,8 +669,6 @@ function buildSingleCentralGreatRoomLarge(program) {
     rooms.push(room('Garden', 'garden', 0, outdoorY + (program.extras.includes('patio') ? 3 : 0), width, 5));
   }
 
-  validateNoOverlap(rooms);
-
   return {
     storey: 'single',
     desc: buildDescription(program, 'single', 'single_central_great_room_large'),
@@ -697,10 +681,6 @@ function buildSingleCentralGreatRoomLarge(program) {
     }
   };
 }
-
-/* =========================
-   DOUBLE STOREY ARCHETYPE
-========================= */
 
 function buildDoubleCentralCore(program) {
   const ground = [];
@@ -719,11 +699,16 @@ function buildDoubleCentralCore(program) {
   const kitchenPlaced = placeBlockToRight(kitchenDining, ground, boundsOf(greatPlaced).right + 1, 0, 1);
   ground.push(...kitchenPlaced);
 
-  ground.push(room('Stairs', 'stairs', boundsOf(greatPlaced).right - 1, boundsOf(greatPlaced).bottom - 1, 2, 3));
-  ground.push(room('Powder', 'bathroom', boundsOf(greatPlaced).right + 1, boundsOf(greatPlaced).bottom, 3, 2));
+  const greatBounds = boundsOf(greatPlaced);
+  const kitchenBounds = boundsOf(kitchenPlaced);
+  const stairX = Math.max(greatBounds.right + 1, kitchenBounds.x + 1);
+  const stairY = greatBounds.bottom + 1;
+
+  ground.push(room('Stairs', 'stairs', stairX, stairY, 2, 3));
+  ground.push(room('Powder', 'bathroom', stairX + 2, stairY, 3, 2));
 
   const servicePlaced = garageService.length
-    ? placeBlockBelow(garageService, ground, 0, boundsOf(greatPlaced).bottom + 2, 1)
+    ? placeBlockBelow(garageService, ground, 0, Math.max(greatBounds.bottom, stairY + 3) + 1, 1)
     : [];
   ground.push(...servicePlaced);
 
@@ -773,9 +758,6 @@ function buildDoubleCentralCore(program) {
     1
   );
   first.push(...bathsPlaced);
-
-  validateNoOverlap(ground);
-  validateNoOverlap(first);
 
   return {
     storey: 'double',
@@ -995,8 +977,26 @@ function attachDoorsAndWindows(plan) {
 }
 
 /* =========================
-   PLAN VALIDATION
+   VALIDATION
 ========================= */
+
+function getAllRooms(plan) {
+  return plan.storey === 'double'
+    ? [...(plan.ground || []), ...(plan.first || [])]
+    : (plan.rooms || []);
+}
+
+function findFirstOverlap(rooms) {
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i];
+      const b = rooms[j];
+      if (a.t === 'garden' || a.t === 'patio' || b.t === 'garden' || b.t === 'patio') continue;
+      if (rectsOverlap(a, b)) return { a, b };
+    }
+  }
+  return null;
+}
 
 function validatePlan(plan) {
   const errors = [];
@@ -1006,9 +1006,7 @@ function validatePlan(plan) {
   if (!plan.sum || typeof plan.sum !== 'object') errors.push('Missing summary');
   if (!plan.storey) errors.push('Missing storey');
 
-  const allRooms = plan.storey === 'double'
-    ? [...(plan.ground || []), ...(plan.first || [])]
-    : (plan.rooms || []);
+  const allRooms = getAllRooms(plan);
 
   if (!Array.isArray(allRooms) || allRooms.length === 0) {
     errors.push('No rooms returned');
@@ -1056,6 +1054,140 @@ function validatePlan(plan) {
 }
 
 /* =========================
+   CODE-BASED REPAIR
+========================= */
+
+function roomPriority(t) {
+  const priorities = {
+    garden: 100,
+    patio: 90,
+    passage: 80,
+    bathroom: 70,
+    ensuite: 65,
+    laundry: 60,
+    scullery: 58,
+    study: 55,
+    garage: 50,
+    stairs: 45,
+    kitchen: 40,
+    dining: 35,
+    living: 30,
+    room: 20
+  };
+  return priorities[t] ?? 10;
+}
+
+function moveRoomBelow(target, blocker, gap = 1) {
+  return {
+    ...target,
+    y: blocker.y + blocker.h + gap
+  };
+}
+
+function moveRoomRightOf(target, blocker, gap = 1) {
+  return {
+    ...target,
+    x: blocker.x + blocker.w + gap
+  };
+}
+
+function fixOverlapsOnFloor(rooms) {
+  let working = rooms.map(r => ({ ...r }));
+  let safety = 0;
+
+  while (safety < 50) {
+    const overlap = findFirstOverlap(working);
+    if (!overlap) return working;
+
+    const { a, b } = overlap;
+    const moveA = roomPriority(a.t) > roomPriority(b.t);
+
+    const blocker = moveA ? b : a;
+    const target = moveA ? a : b;
+    const idx = working.findIndex(r => r.name === target.name);
+
+    const blockerBottom = blocker.y + blocker.h;
+    const blockerRight = blocker.x + blocker.w;
+    const overlapWidth = Math.min(target.x + target.w, blocker.x + blocker.w) - Math.max(target.x, blocker.x);
+    const overlapHeight = Math.min(target.y + target.h, blocker.y + blocker.h) - Math.max(target.y, blocker.y);
+
+    const repaired = overlapHeight >= overlapWidth
+      ? moveRoomBelow(target, blocker, 1)
+      : moveRoomRightOf(target, blocker, 1);
+
+    working[idx] = repaired;
+    safety++;
+  }
+
+  throw new Error('Code repair could not resolve overlaps');
+}
+
+function codeBasedRepair(plan) {
+  const clone = JSON.parse(JSON.stringify(plan));
+
+  if (clone.storey === 'double') {
+    clone.ground = fixOverlapsOnFloor(clone.ground || []);
+    clone.first = fixOverlapsOnFloor(clone.first || []);
+  } else {
+    clone.rooms = fixOverlapsOnFloor(clone.rooms || []);
+  }
+
+  return clone;
+}
+
+/* =========================
+   AI REPAIR
+========================= */
+
+async function repairPlanWithAI({ description, program, plan, errors }) {
+  const prompt = `You are correcting a floor plan JSON.
+
+ORIGINAL CLIENT DESCRIPTION:
+${description}
+
+PROGRAM:
+${JSON.stringify(program, null, 2)}
+
+BROKEN PLAN:
+${JSON.stringify(plan, null, 2)}
+
+VALIDATION ERRORS:
+${errors.map((e, i) => `${i + 1}. ${e}`).join('\n')}
+
+Your task:
+- Fix the plan
+- Keep the same overall design intent
+- Do not remove required rooms
+- Do not change the storey unless absolutely necessary
+- Resolve overlaps and access issues
+- Keep room types the same
+- Use whole-number coordinates and dimensions
+- Return only valid JSON
+- Return no markdown
+- Return no explanation
+
+If single storey, return:
+{
+  "storey": "single",
+  "desc": "...",
+  "rooms": [...],
+  "sum": {"beds": 4, "baths": 3, "size": "~220m²", "floors": 1}
+}
+
+If double storey, return:
+{
+  "storey": "double",
+  "desc": "...",
+  "ground": [...],
+  "first": [...],
+  "sum": {"beds": 6, "baths": 4, "size": "~320m²", "floors": 2}
+}`;
+
+  const text = await callGroq([{ role: 'user', content: prompt }], 0.1, 2200);
+  return extractJson(text);
+}
+
+/* =========================
    MAIN BUILDER
 ========================= */
 
@@ -1077,9 +1209,48 @@ function buildBasePlanFromArchetype(program) {
   throw new Error(`Unknown archetype: ${archetype}`);
 }
 
-function buildPlanDeterministically(program) {
-  const base = buildBasePlanFromArchetype(program);
-  return attachDoorsAndWindows(base);
+function withFreshDoorsAndWindows(plan) {
+  const planWithoutOpenings = {
+    ...plan,
+    doors: [],
+    windows: []
+  };
+  return attachDoorsAndWindows(planWithoutOpenings);
+}
+
+async function buildPlanWithRepair(fullContext, program) {
+  let plan = withFreshDoorsAndWindows(buildBasePlanFromArchetype(program));
+  let errors = validatePlan(plan);
+
+  if (errors.length === 0) return plan;
+
+  try {
+    plan = withFreshDoorsAndWindows(codeBasedRepair(plan));
+    errors = validatePlan(plan);
+    if (errors.length === 0) return plan;
+  } catch (_err) {
+    // continue to AI repair
+  }
+
+  let attempts = 0;
+  while (errors.length > 0 && attempts < 2) {
+    const repaired = await repairPlanWithAI({
+      description: fullContext,
+      program,
+      plan,
+      errors
+    });
+
+    plan = withFreshDoorsAndWindows(repaired);
+    errors = validatePlan(plan);
+    attempts++;
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Plan failed after repair attempts: ${errors.join(' | ')}`);
+  }
+
+  return plan;
 }
 
 /* =========================
@@ -1111,7 +1282,7 @@ Format your response as a friendly short intro sentence then exactly 4 questions
     res.json({ questions: text });
   } catch (err) {
     console.error('ASK ERROR:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Could not generate clarifying questions right now.' });
   }
 });
 
@@ -1121,16 +1292,7 @@ app.post('/generate', async (req, res) => {
 
   try {
     const program = await generateProgram(fullContext, style, size);
-    const plan = buildPlanDeterministically(program);
-    const errors = validatePlan(plan);
-
-    if (errors.length > 0) {
-      return res.status(422).json({
-        error: 'Generated plan failed validation',
-        validationErrors: errors,
-        program
-      });
-    }
+    const plan = await buildPlanWithRepair(fullContext, program);
 
     res.json({
       ...plan,
@@ -1138,7 +1300,7 @@ app.post('/generate', async (req, res) => {
     });
   } catch (err) {
     console.error('GENERATE ERROR:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Could not generate a valid floor plan right now.' });
   }
 });
 
@@ -1164,16 +1326,7 @@ app.post('/revise', async (req, res) => {
         };
 
     const revisedProgram = await reviseProgram(baseProgram, request, description || '');
-    const revisedPlan = buildPlanDeterministically(revisedProgram);
-    const errors = validatePlan(revisedPlan);
-
-    if (errors.length > 0) {
-      return res.status(422).json({
-        error: 'Revised plan failed validation',
-        validationErrors: errors,
-        program: revisedProgram
-      });
-    }
+    const revisedPlan = await buildPlanWithRepair(description || '', revisedProgram);
 
     res.json({
       ...revisedPlan,
@@ -1181,12 +1334,15 @@ app.post('/revise', async (req, res) => {
     });
   } catch (err) {
     console.error('REVISE ERROR:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Could not revise the floor plan right now.' });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+/* =========================
+   START
+========================= */
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`ArchAI backend running on port ${PORT}`);
 });
