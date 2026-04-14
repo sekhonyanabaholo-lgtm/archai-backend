@@ -56,11 +56,54 @@ async function callGroq(messages, temperature = 0.2, maxTokens = 1800) {
   return content.trim();
 }
 
-function extractJson(text) {
-  const cleaned = String(text).replace(/```json/gi, '').replace(/```/g, '').trim();
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON object found in model response');
-  return JSON.parse(match[0]);
+function extractJsonBlock(text) {
+  const cleaned = String(text || '')
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('No JSON object found in model response');
+  }
+
+  return cleaned.slice(start, end + 1);
+}
+
+async function parseJsonWithRepair(rawText, maxAttempts = 3) {
+  let candidate = extractJsonBlock(rawText);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return JSON.parse(candidate);
+    } catch (err) {
+      lastError = err;
+
+      const repairPrompt = `You are fixing malformed JSON.
+
+Return ONLY valid JSON.
+Do not include markdown.
+Do not include explanation.
+Do not remove fields unless required to make the JSON valid.
+Preserve the structure and values as closely as possible.
+
+Malformed JSON:
+${candidate}`;
+
+      const repaired = await callGroq(
+        [{ role: 'user', content: repairPrompt }],
+        0.05,
+        2200
+      );
+
+      candidate = extractJsonBlock(repaired);
+    }
+  }
+
+  throw new Error(`JSON repair failed: ${lastError.message}`);
 }
 
 /* =========================
@@ -115,7 +158,7 @@ Rules:
 - Return ONLY raw JSON`;
 
   const text = await callGroq([{ role: 'user', content: prompt }], 0.1);
-  const program = extractJson(text);
+  const program = await parseJsonWithRepair(text);
 
   program.beds = Math.max(1, Math.min(8, Number(program.beds || 3)));
   program.baths = Math.max(1, Math.min(6, Number(program.baths || 2)));
@@ -173,7 +216,7 @@ Rules:
 - Return ONLY raw JSON`;
 
   const text = await callGroq([{ role: 'user', content: prompt }], 0.1);
-  const updated = extractJson(text);
+  const updated = await parseJsonWithRepair(text);
 
   updated.beds = Math.max(1, Math.min(8, Number(updated.beds || existingProgram.beds || 3)));
   updated.baths = Math.max(1, Math.min(6, Number(updated.baths || existingProgram.baths || 2)));
@@ -1170,7 +1213,7 @@ If double storey, return:
 }`;
 
   const text = await callGroq([{ role: 'user', content: prompt }], 0.1, 2200);
-  return extractJson(text);
+  return await parseJsonWithRepair(text, 3);
 }
 
 /* =========================
@@ -1258,7 +1301,7 @@ Format your response as a friendly short intro sentence then exactly 4 questions
 
     res.json({ questions: text });
   } catch (err) {
-    console.error('ASK ERROR:', err.message);
+    console.error('ASK ERROR:', err);
     res.status(500).json({ error: 'Could not generate clarifying questions right now.' });
   }
 });
@@ -1276,8 +1319,10 @@ app.post('/generate', async (req, res) => {
       program
     });
   } catch (err) {
-    console.error('GENERATE ERROR:', err.message);
-    res.status(500).json({ error: 'Could not generate a valid floor plan right now.' });
+    console.error('GENERATE ERROR:', err);
+    res.status(500).json({
+      error: err?.message || 'Could not generate a valid floor plan right now.'
+    });
   }
 });
 
@@ -1310,8 +1355,10 @@ app.post('/revise', async (req, res) => {
       program: revisedProgram
     });
   } catch (err) {
-    console.error('REVISE ERROR:', err.message);
-    res.status(500).json({ error: 'Could not revise the floor plan right now.' });
+    console.error('REVISE ERROR:', err);
+    res.status(500).json({
+      error: err?.message || 'Could not revise the floor plan right now.'
+    });
   }
 });
 
