@@ -12,10 +12,6 @@ if (!GROQ_KEY) {
   throw new Error('Missing GROQ_KEY environment variable');
 }
 
-/* =========================
-   BASIC ROUTES
-========================= */
-
 app.get('/', (_req, res) => {
   res.send('ArchAI backend is live');
 });
@@ -23,10 +19,6 @@ app.get('/', (_req, res) => {
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
-
-/* =========================
-   LLM
-========================= */
 
 async function callGroq(messages, temperature = 0.1, maxTokens = 420) {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -85,10 +77,6 @@ async function parseJsonWithRepair(rawText) {
     }
   }
 }
-
-/* =========================
-   PROGRAM
-========================= */
 
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
@@ -204,10 +192,6 @@ Return updated JSON in the exact same structure only.`;
   return ensureProgram(await parseJsonWithRepair(text), existingProgram.sizeBand || 'medium');
 }
 
-/* =========================
-   GEOMETRY
-========================= */
-
 function room(name, t, x, y, w, h) {
   return { name, t, x, y, w, h };
 }
@@ -266,10 +250,6 @@ function estimateHomeSize(program, floors) {
 
   return `~${Math.round(floors === 2 ? total * 0.95 : total)}m²`;
 }
-
-/* =========================
-   VALIDATION
-========================= */
 
 function getAllRooms(plan) {
   return plan.storey === 'double'
@@ -374,10 +354,6 @@ function validatePlan(plan) {
   }
 }
 
-/* =========================
-   ARCHETYPE CHOICE
-========================= */
-
 function chooseStorey(program) {
   if (program.storeyPreference === 'single') return 'single';
   if (program.storeyPreference === 'double') return 'double';
@@ -387,16 +363,11 @@ function chooseStorey(program) {
 
 function chooseArchetype(program) {
   const storey = chooseStorey(program);
-
   if (storey === 'double') return 'double_split';
   if (program.archetypePreference === 'single_wing') return 'single_wing';
   if (program.beds >= 5) return 'single_wing';
   return 'single_core';
 }
-
-/* =========================
-   OPENINGS
-========================= */
 
 function sharedSideBetweenRooms(a, b) {
   if (a.x + a.w === b.x && rangesOverlap(a.y, a.y + a.h, b.y, b.y + b.h)) {
@@ -584,10 +555,6 @@ function attachDoorsAndWindows(plan) {
   };
 }
 
-/* =========================
-   ARCHETYPES
-========================= */
-
 function buildSingleCorePlan(program) {
   const rooms = [];
 
@@ -595,6 +562,7 @@ function buildSingleCorePlan(program) {
   const kitchenW = 5;
   const diningW = program.livingSpaces.includes('dining') ? 4 : 0;
   const publicWidth = livingW + kitchenW + diningW;
+  const hallW = Math.max(publicWidth, 18);
 
   rooms.push(room('Living room', 'living', 0, 0, livingW, 5));
   rooms.push(room('Kitchen', 'kitchen', livingW, 0, kitchenW, 4));
@@ -612,7 +580,6 @@ function buildSingleCorePlan(program) {
     rooms.push(room('Laundry', 'laundry', serviceX, 4, 3, 2));
   }
 
-  const hallW = Math.max(publicWidth, 16);
   rooms.push(room('Hall', 'passage', 0, 6, hallW, 2));
 
   let x = 0;
@@ -628,17 +595,17 @@ function buildSingleCorePlan(program) {
   }
 
   for (let i = 2; i <= program.beds; i++) {
-    rooms.push(room(`Bedroom ${i}`, 'room', x, y, 4, 3));
-    x += 4;
     if (x + 4 > hallW) {
       x = 0;
       y += 4;
     }
+    rooms.push(room(`Bedroom ${i}`, 'room', x, y, 4, 3));
+    x += 4;
   }
 
-  rooms.push(room('Main bath', 'bathroom', 0, y + 4, 3, 2));
+  rooms.push(room('Main bath', 'bathroom', Math.max(0, hallW - 3), 8, 3, 2));
 
-  let supportX = 4;
+  let supportX = 0;
   const supportY = y + 4;
 
   if (program.extras.includes('study')) {
@@ -679,7 +646,7 @@ function buildSingleWingPlan(program) {
   const livingW = 7;
   const kitchenW = 5;
   const diningW = program.livingSpaces.includes('dining') ? 4 : 0;
-  const topWidth = livingW + kitchenW + diningW;
+  const publicWidth = livingW + kitchenW + diningW;
 
   rooms.push(room('Living room', 'living', 0, 0, livingW, 5));
   rooms.push(room('Kitchen', 'kitchen', livingW, 0, kitchenW, 4));
@@ -692,8 +659,8 @@ function buildSingleWingPlan(program) {
     rooms.push(room('Scullery', 'scullery', livingW, 4, 3, 2));
   }
 
-  const hallX = topWidth;
-  const hallHeight = Math.max(10, program.beds * 3);
+  const hallX = publicWidth;
+  const hallHeight = Math.max(12, program.beds * 4);
   rooms.push(room('Bedroom hall', 'passage', hallX, 0, 2, hallHeight));
 
   let y = 0;
@@ -707,14 +674,14 @@ function buildSingleWingPlan(program) {
 
   for (let i = 2; i <= program.beds; i++) {
     rooms.push(room(`Bedroom ${i}`, 'room', hallX + 2, y, 4, 3));
-    y += 3;
+    y += 4;
   }
 
   rooms.push(room('Main bath', 'bathroom', hallX + 6, 4, 3, 2));
 
   let bottom = Math.max(getBounds(rooms).bottom, hallHeight);
-
   let serviceX = 0;
+
   if (program.extras.includes('study')) {
     rooms.push(room('Study', 'study', serviceX, bottom + 1, 4, 3));
     serviceX += 4;
@@ -727,11 +694,11 @@ function buildSingleWingPlan(program) {
   bottom = getBounds(rooms).bottom;
 
   if (program.extras.includes('patio')) {
-    rooms.push(room('Patio', 'patio', 0, bottom + 1, hallX + 9, 3));
+    rooms.push(room('Patio', 'patio', 0, bottom + 1, hallX + 10, 3));
   }
 
   if (program.extras.includes('garden')) {
-    rooms.push(room('Garden', 'garden', 0, bottom + (program.extras.includes('patio') ? 4 : 1), hallX + 9, 5));
+    rooms.push(room('Garden', 'garden', 0, bottom + (program.extras.includes('patio') ? 4 : 1), hallX + 10, 5));
   }
 
   return {
@@ -790,7 +757,7 @@ function buildDoubleSplitPlan(program) {
   }
 
   first.push(room('Landing', 'passage', 0, 0, 6, 2));
-  first.push(room('Upper hall', 'passage', 0, 2, 16, 2));
+  first.push(room('Upper hall', 'passage', 0, 2, 18, 2));
   first.push(room('Stairs', 'stairs', 0, 4, 2, 3));
 
   let x = 2;
@@ -806,15 +773,15 @@ function buildDoubleSplitPlan(program) {
   }
 
   for (let i = 2; i <= program.beds; i++) {
-    first.push(room(`Bedroom ${i}`, 'room', x, y, 4, 3));
-    x += 4;
-    if (x + 4 > 16) {
+    if (x + 4 > 18) {
       x = 2;
       y += 4;
     }
+    first.push(room(`Bedroom ${i}`, 'room', x, y, 4, 3));
+    x += 4;
   }
 
-  first.push(room('Main bath', 'bathroom', 2, y + 4, 3, 2));
+  first.push(room('Main bath', 'bathroom', 15, 4, 3, 2));
 
   return {
     storey: 'double',
@@ -830,10 +797,6 @@ function buildDoubleSplitPlan(program) {
   };
 }
 
-/* =========================
-   MAIN BUILD
-========================= */
-
 function buildPlanDeterministically(program) {
   const archetype = chooseArchetype(program);
 
@@ -846,10 +809,6 @@ function buildPlanDeterministically(program) {
   validatePlan(withOpenings);
   return withOpenings;
 }
-
-/* =========================
-   ROUTES
-========================= */
 
 app.post('/ask', async (req, res) => {
   const { description } = req.body;
@@ -948,10 +907,6 @@ app.post('/revise', async (req, res) => {
     });
   }
 });
-
-/* =========================
-   START
-========================= */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
