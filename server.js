@@ -50,17 +50,17 @@ app.use(express.json({ limit: '6mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const GROQ_KEY = process.env.GROQ_KEY;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.AI_IMAGE_API_KEY;
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const IMAGE_MODEL = process.env.IMAGE_MODEL || 'gpt-image-1';
-const IMAGE_SIZE = process.env.IMAGE_SIZE || '1536x1024';
+const FAL_KEY = process.env.FAL_KEY;
+const FAL_MODEL = process.env.FAL_MODEL || 'fal-ai/qwen-image';
+const FAL_IMAGE_SIZE = process.env.FAL_IMAGE_SIZE || 'landscape_4_3';
+const FAL_SYNC_URL = process.env.FAL_SYNC_URL || 'https://fal.run';
 
 if (!GROQ_KEY) {
   throw new Error('Missing GROQ_KEY environment variable');
 }
 
-if (!OPENAI_API_KEY) {
-  throw new Error('Missing OPENAI_API_KEY or AI_IMAGE_API_KEY environment variable');
+if (!FAL_KEY) {
+  throw new Error('Missing FAL_KEY environment variable');
 }
 
 function clamp(n, min, max) {
@@ -258,36 +258,37 @@ function buildImagePrompt(brief) {
 }
 
 async function generateFloorPlanImage(prompt) {
-  const response = await fetch(`${OPENAI_BASE_URL}/images/generations`, {
+  const response = await fetch(`${FAL_SYNC_URL}/${FAL_MODEL}`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Key ${FAL_KEY}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: IMAGE_MODEL,
       prompt,
-      size: IMAGE_SIZE
+      image_size: FAL_IMAGE_SIZE,
+      num_images: 1,
+      output_format: 'png',
+      enable_safety_checker: true,
+      sync_mode: false
     })
   });
 
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data?.error?.message || 'Image generation request failed');
+    throw new Error(data?.detail || data?.error?.message || 'fal image generation request failed');
   }
 
-  const item = Array.isArray(data?.data) ? data.data[0] : null;
-  const b64 = item?.b64_json || item?.base64;
-  const url = item?.url || null;
-
-  if (!b64 && !url) {
-    throw new Error('Image API did not return an image');
+  const image = Array.isArray(data?.images) ? data.images[0] : null;
+  const url = image?.url || null;
+  if (!url) {
+    throw new Error('fal did not return an image URL');
   }
 
   return {
-    dataUrl: b64 ? `data:image/png;base64,${b64}` : url,
+    dataUrl: url,
     imageUrl: url,
-    mimeType: b64 ? 'image/png' : 'image/url'
+    mimeType: image?.content_type || 'image/url'
   };
 }
 
@@ -343,8 +344,8 @@ app.get('/api/meta', (_req, res) => {
   res.json({
     ok: true,
     features: ['generate-floor-plan-image', 'revise-floor-plan-image'],
-    version: '4.0.0',
-    mode: 'image-first'
+    version: '4.1.0',
+    mode: 'image-first-fal'
   });
 });
 
