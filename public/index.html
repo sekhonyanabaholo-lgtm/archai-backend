@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArchAI Floor Plan Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div>
+          <h1>ArchAI</h1>
+          <p>Rendered floor plans with revisions</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Describe the house</h2>
+          <p>Example: Modern 3 bedroom family home with a garage, study and covered patio.</p>
+        </div>
+        <textarea id="description" placeholder="Describe the floor plan you want..."></textarea>
+        <button id="generateBtn" class="primary-btn">Generate floor plan</button>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Request a revision</h2>
+          <p>Example: Make the main bedroom larger and add a walk-in closet.</p>
+        </div>
+        <textarea id="revision" placeholder="Tell ArchAI what to change..."></textarea>
+        <button id="reviseBtn" class="secondary-btn">Apply revision</button>
+      </section>
+
+      <section class="panel history-panel">
+        <div class="panel-header">
+          <h2>Revision history</h2>
+          <p>Your latest prompts appear here.</p>
+        </div>
+        <div id="history" class="history-list">
+          <div class="empty-history">No revisions yet.</div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <div class="workspace-topbar">
+        <div>
+          <h2 id="planTitle">Rendered floor plan</h2>
+          <p id="planMeta">Generate a plan to preview it here.</p>
+        </div>
+        <div class="status-wrap">
+          <span id="statusPill" class="status-pill idle">Idle</span>
+        </div>
+      </div>
+
+      <section class="canvas-panel">
+        <div id="placeholder" class="placeholder">
+          <div class="placeholder-card">
+            <h3>Your rendered floor plan will appear here</h3>
+            <p>Describe the home you want, generate it, then refine it with revision prompts.</p>
+          </div>
+        </div>
+        <img id="planImage" alt="Generated floor plan" />
+      </section>
+
+      <section class="details-grid">
+        <div class="detail-card">
+          <h3>Summary</h3>
+          <div id="summaryContent" class="detail-content muted">No plan generated yet.</div>
+        </div>
+        <div class="detail-card">
+          <h3>Design priorities</h3>
+          <div id="prioritiesContent" class="detail-content muted">No priorities yet.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
