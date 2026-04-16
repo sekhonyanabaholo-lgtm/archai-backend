@@ -287,7 +287,9 @@ function buildAdjacencyGraph(rooms) {
 function ensureIndependentBedroomAccess(rooms) {
   const graph = buildAdjacencyGraph(rooms);
   const byName = new Map(rooms.map(r => [r.name, r]));
-  const starts = rooms.filter(r => ['living', 'dining', 'kitchen', 'passage'].includes(r.t)).map(r => r.name);
+  const starts = rooms
+    .filter(r => ['living', 'dining', 'kitchen', 'passage'].includes(r.t))
+    .map(r => r.name);
   const bedrooms = rooms.filter(r => r.t === 'room');
 
   for (const bedroom of bedrooms) {
@@ -552,48 +554,47 @@ function buildReferenceStyleSingle(program) {
   const hallW = 2;
   const ensuiteW = program.masterEnsuite ? 3 : 0;
 
-  const leftBlockW = Math.max(primaryW + ensuiteW, secondaryW) + hallW;
+  const bedroomBlockW = Math.max(primaryW + ensuiteW, secondaryW);
+  const hallX = bedroomBlockW;
+  const leftBlockW = bedroomBlockW + hallW;
 
-  let y = 0;
-  rooms.push(room('Primary bedroom', 'room', 0, y, primaryW, primaryH));
+  rooms.push(room('Primary bedroom', 'room', 0, 0, primaryW, primaryH));
 
   if (program.masterEnsuite) {
-    rooms.push(room('En-suite', 'ensuite', primaryW, y, 3, 2));
-    rooms.push(room('Wardrobe hall', 'passage', primaryW, y + 2, 3, 2));
+    rooms.push(room('En-suite', 'ensuite', primaryW, 0, 3, 2));
+    rooms.push(room('Wardrobe hall', 'passage', primaryW, 2, 3, 2));
   }
 
+  let y = 4;
   const secondaryCount = Math.max(0, program.beds - 1);
-  y = 4;
+
   for (let i = 0; i < secondaryCount; i++) {
     rooms.push(room(`Bedroom ${i + 2}`, 'room', 0, y, secondaryW, secondaryH));
     y += 4;
   }
 
-  rooms.push(room('Bedroom hall', 'passage', leftBlockW - hallW, 4, hallW, Math.max(6, y - 4)));
+  const hallHeight = Math.max(8, y - 4);
+  rooms.push(room('Bedroom hall', 'passage', hallX, 4, hallW, hallHeight));
 
   const entryX = leftBlockW;
   const entryY = 7;
   rooms.push(room('Entry', 'passage', entryX, entryY, 3, 3));
 
-  const bathX = entryX + 3;
-  const bathY = entryY + 2;
-  rooms.push(room('Bathroom', 'bathroom', bathX, bathY, 4, 3));
+  rooms.push(room('Bathroom', 'bathroom', entryX + 3, entryY + 1, 4, 3));
 
-  const coreX = leftBlockW + 3;
-  const coreY = 0;
+  const coreX = entryX + 3;
   const coreW = 11;
-  const coreH = 11;
 
-  rooms.push(room('Open plan living', 'living', coreX, coreY, 5, 5));
-  rooms.push(room('Dining', 'dining', coreX + 5, coreY + 4, 6, 3));
-  rooms.push(room('Kitchen', 'kitchen', coreX + 6, coreY + 7, 5, 4));
+  rooms.push(room('Open plan living', 'living', coreX, 0, 5, 5));
+  rooms.push(room('Dining', 'dining', coreX + 5, 4, 6, 3));
+  rooms.push(room('Kitchen', 'kitchen', coreX + 6, 7, 5, 4));
 
   if (program.extras.includes('scullery')) {
-    rooms.push(room('Scullery', 'scullery', coreX + 11, coreY + 7, 3, 2));
+    rooms.push(room('Scullery', 'scullery', coreX + 11, 7, 3, 2));
   }
 
   if (program.extras.includes('laundry')) {
-    rooms.push(room('Laundry', 'laundry', coreX + 11, coreY + 9, 3, 2));
+    rooms.push(room('Laundry', 'laundry', coreX + 11, 9, 3, 2));
   }
 
   if (program.extras.includes('study')) {
