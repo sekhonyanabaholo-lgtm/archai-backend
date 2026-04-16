@@ -25,10 +25,10 @@ app.get('/health', (_req, res) => {
 });
 
 /* =========================
-   LLM
+   GROQ
 ========================= */
 
-async function callGroq(messages, temperature = 0.1, maxTokens = 420) {
+async function callGroq(messages, temperature = 0.1, maxTokens = 350) {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -65,6 +65,7 @@ function extractJsonBlock(text) {
 
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
+
   if (start === -1 || end === -1 || end <= start) {
     throw new Error('No JSON object found in model response');
   }
@@ -80,7 +81,7 @@ async function parseJsonWithRepair(rawText) {
   } catch (_err) {
     try {
       return JSON.parse(jsonrepair(block));
-    } catch (_err2) {
+    } catch (_repairErr) {
       throw new Error('Could not parse model JSON');
     }
   }
@@ -102,52 +103,39 @@ function normaliseSizeBand(size) {
 }
 
 function ensureProgram(program, fallbackSize = 'medium') {
-  program = program || {};
+  const p = program || {};
 
-  program.storeyPreference = ['single', 'double', 'either'].includes(program.storeyPreference)
-    ? program.storeyPreference
-    : 'either';
-
-  program.beds = clamp(Number(program.beds || 3), 1, 8);
-  program.baths = clamp(Number(program.baths || 2), 1, 6);
-
-  program.livingSpaces = Array.isArray(program.livingSpaces) && program.livingSpaces.length
-    ? program.livingSpaces
-    : ['living', 'dining', 'kitchen'];
-
-  program.extras = Array.isArray(program.extras) ? program.extras : ['patio', 'garden'];
-
-  program.masterEnsuite = !!program.masterEnsuite;
-
-  program.notes = typeof program.notes === 'object' && program.notes ? program.notes : {};
-  program.notes.openPlan = !!program.notes.openPlan;
-  program.notes.entertainmentFocus = !!program.notes.entertainmentFocus;
-  program.notes.premiumMainSuite = !!program.notes.premiumMainSuite;
-
-  program.sizeBand = ['small', 'medium', 'large'].includes(program.sizeBand)
-    ? program.sizeBand
-    : fallbackSize;
-
-  program.referenceStyle = 'single_core_bedwing_garage';
-
-  return program;
+  return {
+    storeyPreference: ['single', 'double', 'either'].includes(p.storeyPreference) ? p.storeyPreference : 'single',
+    beds: clamp(Number(p.beds || 3), 2, 6),
+    baths: clamp(Number(p.baths || 2), 1, 4),
+    livingSpaces: Array.isArray(p.livingSpaces) && p.livingSpaces.length ? p.livingSpaces : ['living', 'dining', 'kitchen'],
+    extras: Array.isArray(p.extras) ? p.extras : ['garage', 'study', 'patio', 'garden'],
+    masterEnsuite: p.masterEnsuite !== false,
+    notes: {
+      openPlan: !!(p.notes && p.notes.openPlan),
+      entertainmentFocus: !!(p.notes && p.notes.entertainmentFocus),
+      premiumMainSuite: !!(p.notes && p.notes.premiumMainSuite)
+    },
+    sizeBand: ['small', 'medium', 'large'].includes(p.sizeBand) ? p.sizeBand : fallbackSize
+  };
 }
 
 async function generateProgram(fullContext, style, size) {
   const prompt = `You are an expert residential architect.
 
-Turn the client brief into a structured architectural program.
+Extract a clean program for a house planner based on this reference style:
+- single storey by default
+- left bedroom wing
+- central open-plan living/dining/kitchen
+- bathroom near entry/bedrooms
+- study and garage on the right
+- patio behind the living zone
+- garden beyond patio
+
 Do NOT generate coordinates.
 Do NOT generate a floor plan.
 Return JSON only.
-
-This planner is based on a reference style:
-- single-storey family house
-- central open-plan living/dining/kitchen
-- bedroom wing on one side
-- study and garage on the other side
-- patio directly behind the open-plan zone
-- garden beyond patio
 
 CLIENT BRIEF:
 ${fullContext}
@@ -171,7 +159,7 @@ Return exactly:
   "sizeBand": "small" or "medium" or "large"
 }`;
 
-  const text = await callGroq([{ role: 'user', content: prompt }], 0.1, 320);
+  const text = await callGroq([{ role: 'user', content: prompt }], 0.1, 280);
   return ensureProgram(await parseJsonWithRepair(text), normaliseSizeBand(size));
 }
 
@@ -187,28 +175,25 @@ ${JSON.stringify(existingProgram, null, 2)}
 REVISION REQUEST:
 ${request}
 
-Keep the same general house logic:
-- open-plan core in the middle
-- bedroom wing on one side
-- study/garage on the other side
-- patio behind the living space
+Keep the same overall reference style:
+- left bedroom wing
+- central open-plan core
+- bathroom near entry/bedrooms
+- study and garage on the right
+- patio behind living
 
-Return updated JSON in the exact same structure only.`;
+Return updated JSON only in the exact same structure.`;
 
-  const text = await callGroq([{ role: 'user', content: prompt }], 0.1, 320);
+  const text = await callGroq([{ role: 'user', content: prompt }], 0.1, 280);
   return ensureProgram(await parseJsonWithRepair(text), existingProgram.sizeBand || 'medium');
 }
 
 /* =========================
-   GEOMETRY
+   GEOMETRY HELPERS
 ========================= */
 
 function room(name, t, x, y, w, h) {
   return { name, t, x, y, w, h };
-}
-
-function area(w, h) {
-  return w * h;
 }
 
 function rectsOverlap(a, b) {
@@ -232,11 +217,16 @@ function shareEdge(a, b) {
   return false;
 }
 
+function area(w, h) {
+  return w * h;
+}
+
 function getBounds(rooms) {
-  if (!rooms.length) return { right: 0, bottom: 0, width: 0, height: 0 };
-  const maxX = Math.max(...rooms.map(r => r.x + r.w));
-  const maxY = Math.max(...rooms.map(r => r.y + r.h));
-  return { right: maxX, bottom: maxY, width: maxX, height: maxY };
+  if (!rooms.length) return { right: 0, bottom: 0 };
+  return {
+    right: Math.max(...rooms.map(r => r.x + r.w)),
+    bottom: Math.max(...rooms.map(r => r.y + r.h))
+  };
 }
 
 function countBedrooms(rooms) {
@@ -251,13 +241,12 @@ function estimateHomeSize(program, floors) {
   const total =
     program.beds * 14 +
     program.baths * 5 +
-    38 +
-    (program.livingSpaces.includes('dining') ? 12 : 0) +
+    40 +
     (program.extras.includes('garage') ? 36 : 0) +
     (program.extras.includes('study') ? 10 : 0) +
     (program.extras.includes('scullery') ? 6 : 0) +
     (program.extras.includes('laundry') ? 6 : 0) +
-    (program.extras.includes('patio') ? 18 : 0);
+    (program.extras.includes('patio') ? 20 : 0);
 
   return `~${Math.round(floors === 2 ? total * 0.95 : total)}m²`;
 }
@@ -265,12 +254,6 @@ function estimateHomeSize(program, floors) {
 /* =========================
    VALIDATION
 ========================= */
-
-function getAllRooms(plan) {
-  return plan.storey === 'double'
-    ? [...(plan.ground || []), ...(plan.first || [])]
-    : (plan.rooms || []);
-}
 
 function validateNoOverlap(rooms) {
   for (let i = 0; i < rooms.length; i++) {
@@ -301,10 +284,10 @@ function buildAdjacencyGraph(rooms) {
   return graph;
 }
 
-function ensureIndependentBedroomAccess(rooms, startTypes) {
+function ensureIndependentBedroomAccess(rooms) {
   const graph = buildAdjacencyGraph(rooms);
   const byName = new Map(rooms.map(r => [r.name, r]));
-  const starts = rooms.filter(r => startTypes.includes(r.t)).map(r => r.name);
+  const starts = rooms.filter(r => ['living', 'dining', 'kitchen', 'passage'].includes(r.t)).map(r => r.name);
   const bedrooms = rooms.filter(r => r.t === 'room');
 
   for (const bedroom of bedrooms) {
@@ -321,9 +304,9 @@ function ensureIndependentBedroomAccess(rooms, startTypes) {
 
       for (const next of graph.get(current) || []) {
         if (visited.has(next)) continue;
-        const roomObj = byName.get(next);
-        if (!roomObj) continue;
-        if (roomObj.t === 'room' && next !== bedroom.name) continue;
+        const nextRoom = byName.get(next);
+        if (!nextRoom) continue;
+        if (nextRoom.t === 'room' && next !== bedroom.name) continue;
 
         visited.add(next);
         queue.push(next);
@@ -336,29 +319,32 @@ function ensureIndependentBedroomAccess(rooms, startTypes) {
   }
 }
 
-function ensureCoreAdjacency(plan) {
-  const rooms = plan.rooms || [];
+function ensureKeyAdjacency(rooms) {
   const living = rooms.find(r => r.t === 'living');
-  const kitchen = rooms.find(r => r.t === 'kitchen');
   const dining = rooms.find(r => r.t === 'dining');
+  const kitchen = rooms.find(r => r.t === 'kitchen');
   const patio = rooms.find(r => r.t === 'patio');
 
-  if (living && kitchen && !shareEdge(living, kitchen)) {
-    throw new Error('Kitchen must connect to living');
+  if (living && dining && !shareEdge(living, dining) && !shareEdge(living, kitchen)) {
+    throw new Error('Living must connect to dining or kitchen');
   }
 
-  if (living && dining && !shareEdge(living, dining) && !shareEdge(kitchen, dining)) {
-    throw new Error('Dining must connect to living or kitchen');
+  if (kitchen && dining && !shareEdge(kitchen, dining) && !shareEdge(kitchen, living)) {
+    throw new Error('Kitchen must connect to dining or living');
   }
 
-  if (living && patio && !shareEdge(living, patio) && !(dining && shareEdge(dining, patio)) && !(kitchen && shareEdge(kitchen, patio))) {
-    throw new Error('Patio must connect to open-plan living zone');
+  if (patio && ![living, dining, kitchen].some(r => r && shareEdge(r, patio))) {
+    throw new Error('Patio must connect to the open-plan core');
   }
 }
 
 function validatePlan(plan) {
-  const rooms = getAllRooms(plan);
+  const rooms = plan.rooms || [];
   if (!rooms.length) throw new Error('No rooms generated');
+
+  validateNoOverlap(rooms);
+  ensureIndependentBedroomAccess(rooms);
+  ensureKeyAdjacency(rooms);
 
   for (const r of rooms) {
     if (![r.x, r.y, r.w, r.h].every(v => typeof v === 'number')) {
@@ -368,25 +354,12 @@ function validatePlan(plan) {
       throw new Error(`Invalid room size for ${r.name}`);
     }
     if (r.t === 'room') {
-      if (/master|primary/i.test(r.name) && area(r.w, r.h) < 16) throw new Error(`Primary bedroom too small: ${r.name}`);
-      if (!/master|primary/i.test(r.name) && area(r.w, r.h) < 9) throw new Error(`Bedroom too small: ${r.name}`);
+      if (/primary/i.test(r.name) && area(r.w, r.h) < 16) throw new Error(`Primary bedroom too small: ${r.name}`);
+      if (!/primary/i.test(r.name) && area(r.w, r.h) < 9) throw new Error(`Bedroom too small: ${r.name}`);
     }
     if ((r.t === 'bathroom' || r.t === 'ensuite') && area(r.w, r.h) < 4) {
       throw new Error(`Bathroom too small: ${r.name}`);
     }
-    if (r.t === 'kitchen' && area(r.w, r.h) < 6) {
-      throw new Error(`Kitchen too small: ${r.name}`);
-    }
-  }
-
-  if (plan.storey === 'double') {
-    validateNoOverlap(plan.ground || []);
-    validateNoOverlap(plan.first || []);
-    ensureIndependentBedroomAccess(plan.first || [], ['passage', 'stairs']);
-  } else {
-    validateNoOverlap(plan.rooms || []);
-    ensureIndependentBedroomAccess(plan.rooms || [], ['living', 'dining', 'kitchen', 'passage']);
-    ensureCoreAdjacency(plan);
   }
 }
 
@@ -469,14 +442,14 @@ function dedupeWindows(windows) {
 
 function generateInteriorDoorsForFloor(rooms) {
   const doors = [];
-  const accessTypes = new Set(['passage', 'living', 'dining', 'kitchen', 'stairs']);
+  const accessTypes = new Set(['passage', 'living', 'dining', 'kitchen']);
 
   rooms.forEach(a => {
     if (!accessTypes.has(a.t)) return;
 
     rooms.forEach(b => {
       if (a === b) return;
-      if (!['room', 'bathroom', 'ensuite', 'study', 'garage', 'kitchen', 'living', 'dining', 'scullery', 'laundry', 'stairs'].includes(b.t)) return;
+      if (!['room', 'bathroom', 'ensuite', 'study', 'garage', 'kitchen', 'living', 'dining', 'scullery', 'laundry'].includes(b.t)) return;
 
       const shared = sharedSideBetweenRooms(a, b);
       if (!shared) return;
@@ -497,7 +470,7 @@ function generateInteriorDoorsForFloor(rooms) {
 
 function generateExteriorDoorsForFloor(rooms) {
   const doors = [];
-  const priorities = ['living', 'dining', 'kitchen', 'garage', 'entry'];
+  const priorities = ['living', 'garage', 'passage'];
 
   priorities.forEach(type => {
     const r = rooms.find(x => x.t === type);
@@ -555,100 +528,76 @@ function generateWindowsForFloor(rooms) {
 }
 
 function attachDoorsAndWindows(plan) {
-  if (plan.storey === 'single') {
-    return {
-      ...plan,
-      doors: [
-        ...generateInteriorDoorsForFloor(plan.rooms),
-        ...generateExteriorDoorsForFloor(plan.rooms)
-      ],
-      windows: generateWindowsForFloor(plan.rooms)
-    };
-  }
-
   return {
     ...plan,
     doors: [
-      ...generateInteriorDoorsForFloor(plan.ground),
-      ...generateExteriorDoorsForFloor(plan.ground),
-      ...generateInteriorDoorsForFloor(plan.first)
+      ...generateInteriorDoorsForFloor(plan.rooms),
+      ...generateExteriorDoorsForFloor(plan.rooms)
     ],
-    windows: [
-      ...generateWindowsForFloor(plan.ground),
-      ...generateWindowsForFloor(plan.first)
-    ]
+    windows: generateWindowsForFloor(plan.rooms)
   };
 }
 
 /* =========================
-   REFERENCE-STYLE PLANNER
+   REFERENCE STYLE PLANNER
 ========================= */
-
-function chooseStorey(program) {
-  if (program.storeyPreference === 'single') return 'single';
-  if (program.storeyPreference === 'double') return 'double';
-  return 'single';
-}
 
 function buildReferenceStyleSingle(program) {
   const rooms = [];
 
   const primaryW = program.notes.premiumMainSuite ? 5 : 4;
+  const primaryH = 4;
   const secondaryW = 4;
-  const bedWingW = Math.max(primaryW + 3, secondaryW);
-  const bedWingX = 0;
+  const secondaryH = 3;
+  const hallW = 2;
+  const ensuiteW = program.masterEnsuite ? 3 : 0;
 
-  const secondaryCount = Math.max(0, program.beds - 1);
-  let bedStackY = 0;
+  const leftBlockW = Math.max(primaryW + ensuiteW, secondaryW) + hallW;
 
-  rooms.push(room('Primary bedroom', 'room', bedWingX, bedStackY, primaryW, 4));
+  let y = 0;
+  rooms.push(room('Primary bedroom', 'room', 0, y, primaryW, primaryH));
 
   if (program.masterEnsuite) {
-    rooms.push(room('En-suite', 'ensuite', bedWingX + primaryW, bedStackY, 3, 2));
-    rooms.push(room('Closet', 'passage', bedWingX + primaryW, bedStackY + 2, 3, 2));
+    rooms.push(room('En-suite', 'ensuite', primaryW, y, 3, 2));
+    rooms.push(room('Wardrobe hall', 'passage', primaryW, y + 2, 3, 2));
   }
 
-  bedStackY += 4;
-
+  const secondaryCount = Math.max(0, program.beds - 1);
+  y = 4;
   for (let i = 0; i < secondaryCount; i++) {
-    rooms.push(room(`Bedroom ${i + 2}`, 'room', bedWingX, bedStackY, secondaryW, 3));
-    bedStackY += 3;
+    rooms.push(room(`Bedroom ${i + 2}`, 'room', 0, y, secondaryW, secondaryH));
+    y += 4;
   }
 
-  const entryW = 3;
-  const entryH = 3;
-  const entryX = bedWingW;
+  rooms.push(room('Bedroom hall', 'passage', leftBlockW - hallW, 4, hallW, Math.max(6, y - 4)));
+
+  const entryX = leftBlockW;
   const entryY = 7;
-  rooms.push(room('Entry', 'passage', entryX, entryY, entryW, entryH));
+  rooms.push(room('Entry', 'passage', entryX, entryY, 3, 3));
 
-  const bathW = 4;
-  const bathH = 3;
   const bathX = entryX + 3;
-  const bathY = entryY + 3;
-  rooms.push(room('Main bathroom', 'bathroom', bathX, bathY, bathW, bathH));
+  const bathY = entryY + 2;
+  rooms.push(room('Bathroom', 'bathroom', bathX, bathY, 4, 3));
 
-  const coreX = bedWingW + 3;
+  const coreX = leftBlockW + 3;
   const coreY = 0;
-  const coreW = 10;
+  const coreW = 11;
   const coreH = 11;
 
   rooms.push(room('Open plan living', 'living', coreX, coreY, 5, 5));
-  rooms.push(room('Dining', 'dining', coreX + 5, coreY + 4, 5, 3));
-  rooms.push(room('Kitchen', 'kitchen', coreX + 6, coreY + 7, 4, 4));
+  rooms.push(room('Dining', 'dining', coreX + 5, coreY + 4, 6, 3));
+  rooms.push(room('Kitchen', 'kitchen', coreX + 6, coreY + 7, 5, 4));
 
   if (program.extras.includes('scullery')) {
-    rooms.push(room('Scullery', 'scullery', coreX + 10, coreY + 7, 3, 2));
+    rooms.push(room('Scullery', 'scullery', coreX + 11, coreY + 7, 3, 2));
   }
 
   if (program.extras.includes('laundry')) {
-    rooms.push(room('Laundry', 'laundry', coreX + 10, coreY + 9, 3, 2));
+    rooms.push(room('Laundry', 'laundry', coreX + 11, coreY + 9, 3, 2));
   }
 
-  const studyX = coreX + coreW;
-  const studyY = 4;
-  const studyW = program.extras.includes('study') ? 4 : 0;
   if (program.extras.includes('study')) {
-    rooms.push(room('Study', 'study', studyX, studyY, studyW, 3));
+    rooms.push(room('Study', 'study', coreX + coreW, 4, 4, 3));
   }
 
   if (program.extras.includes('garage')) {
@@ -656,18 +605,25 @@ function buildReferenceStyleSingle(program) {
     rooms.push(room('Garage', 'garage', garageX, 0, 6, 8));
   }
 
-  const patioY = coreY - 3;
   if (program.extras.includes('patio')) {
-    rooms.push(room('Patio', 'patio', coreX, patioY, coreW + (program.extras.includes('study') ? 4 : 0), 3));
+    rooms.push(room(
+      'Patio',
+      'patio',
+      coreX,
+      -3,
+      coreW + (program.extras.includes('study') ? 4 : 0),
+      3
+    ));
   }
 
   if (program.extras.includes('garden')) {
-    rooms.push(room('Garden', 'garden', 0, patioY - 5, coreX + coreW + (program.extras.includes('study') ? 4 : 0) + (program.extras.includes('garage') ? 6 : 0), 5));
+    const totalWidth = getBounds(rooms).right;
+    rooms.push(room('Garden', 'garden', 0, -8, totalWidth, 5));
   }
 
   return {
     storey: 'single',
-    desc: 'A reference-style family house with a bedroom wing, central open-plan core, side study/garage, and rear patio garden connection.',
+    desc: 'A reference-style family house with a left bedroom wing, central open-plan core, side study and garage, plus patio and garden at the rear.',
     rooms,
     sum: {
       beds: countBedrooms(rooms),
@@ -678,73 +634,8 @@ function buildReferenceStyleSingle(program) {
   };
 }
 
-function buildSimpleDoubleFallback(program) {
-  const ground = [];
-  const first = [];
-
-  ground.push(room('Living room', 'living', 0, 0, 7, 5));
-  ground.push(room('Dining', 'dining', 7, 0, 4, 4));
-  ground.push(room('Kitchen', 'kitchen', 7, 4, 4, 4));
-  ground.push(room('Entry', 'passage', 0, 5, 3, 3));
-  ground.push(room('Stairs', 'stairs', 3, 5, 2, 3));
-  ground.push(room('Main bathroom', 'bathroom', 5, 5, 3, 2));
-
-  if (program.extras.includes('study')) {
-    ground.push(room('Study', 'study', 11, 4, 4, 3));
-  }
-
-  if (program.extras.includes('garage')) {
-    ground.push(room('Garage', 'garage', 15, 0, 6, 8));
-  }
-
-  if (program.extras.includes('patio')) {
-    ground.push(room('Patio', 'patio', 0, -3, 15, 3));
-  }
-
-  if (program.extras.includes('garden')) {
-    ground.push(room('Garden', 'garden', 0, -8, 21, 5));
-  }
-
-  first.push(room('Landing', 'passage', 0, 0, 5, 2));
-  first.push(room('Upper hall', 'passage', 0, 2, 14, 2));
-  first.push(room('Stairs', 'stairs', 0, 4, 2, 3));
-
-  let x = 2;
-  let y = 4;
-
-  first.push(room('Primary bedroom', 'room', x, y, 5, 4));
-  if (program.masterEnsuite) {
-    first.push(room('En-suite', 'ensuite', x + 5, y, 3, 2));
-  }
-
-  y += 4;
-  for (let i = 2; i <= program.beds; i++) {
-    first.push(room(`Bedroom ${i}`, 'room', x, y, 4, 3));
-    y += 4;
-  }
-
-  first.push(room('Main bathroom', 'bathroom', 8, 8, 3, 2));
-
-  return {
-    storey: 'double',
-    desc: 'A simple double-storey fallback with public spaces below and bedrooms above.',
-    ground,
-    first,
-    sum: {
-      beds: countBedrooms([...ground, ...first]),
-      baths: countBathrooms([...ground, ...first]),
-      size: estimateHomeSize(program, 2),
-      floors: 2
-    }
-  };
-}
-
 function buildPlanDeterministically(program) {
-  const storey = chooseStorey(program);
-  const base = storey === 'double'
-    ? buildSimpleDoubleFallback(program)
-    : buildReferenceStyleSingle(program);
-
+  const base = buildReferenceStyleSingle(program);
   const withOpenings = attachDoorsAndWindows(base);
   validatePlan(withOpenings);
   return withOpenings;
@@ -760,10 +651,10 @@ app.post('/ask', async (req, res) => {
   try {
     const text = await callGroq([{
       role: 'user',
-      content: `You are a friendly South African architect assistant. A client said: "${description}"
+      content: `You are a friendly architect assistant. A client said: "${description}"
 
-Ask exactly 4 short clarifying questions before designing the floor plan.
-Keep it conversational and natural.
+Ask exactly 4 short clarifying questions before designing the house.
+Keep it conversational.
 Number them 1 to 4.
 Do not generate the plan yet.`
     }], 0.3, 220);
@@ -815,11 +706,11 @@ app.post('/revise', async (req, res) => {
       currentProgram && typeof currentProgram === 'object'
         ? currentProgram
         : {
-            storeyPreference: 'either',
+            storeyPreference: 'single',
             beds: 3,
             baths: 2,
             livingSpaces: ['living', 'dining', 'kitchen'],
-            extras: ['patio', 'garden'],
+            extras: ['garage', 'study', 'patio', 'garden'],
             masterEnsuite: true,
             notes: { openPlan: true, entertainmentFocus: false, premiumMainSuite: false },
             sizeBand: 'medium'
