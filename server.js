@@ -50,7 +50,6 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const GROQ_KEY = process.env.GROQ_KEY;
-
 if (!GROQ_KEY) {
   throw new Error('Missing GROQ_KEY environment variable');
 }
@@ -90,7 +89,7 @@ function escapeXml(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replace(/\"/g, '&quot;')
     .replace(/'/g, '&apos;');
 }
 
@@ -110,7 +109,6 @@ async function callGroq(messages, temperature = 0.2, maxTokens = 1200) {
   });
 
   const data = await response.json();
-
   if (!response.ok) {
     throw new Error(data?.error?.message || 'Groq request failed');
   }
@@ -131,7 +129,6 @@ function extractJsonBlock(textValue) {
 
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
-
   if (start === -1 || end === -1 || end <= start) {
     throw new Error('No JSON object found in model response');
   }
@@ -273,23 +270,23 @@ function generateOpenings(rooms) {
     if (['garden', 'patio', 'garage'].includes(r.type)) return;
 
     if (r.type === 'living') {
-      windows.push({ x1: r.x + 1.0, y1: r.y, x2: r.x + r.w - 1.0, y2: r.y });
+      windows.push({ x1: r.x + 0.8, y1: r.y, x2: r.x + r.w - 0.8, y2: r.y });
       doors.push({ x: r.x + r.w / 2, y: r.y, side: 'top', swing: 'out' });
     }
 
     if (r.type === 'bedroom') {
-      windows.push({ x1: r.x, y1: r.y + 0.8, x2: r.x, y2: r.y + r.h - 0.8 });
-      doors.push({ x: r.x + r.w, y: r.y + r.h - 0.9, side: 'right', swing: 'in' });
+      windows.push({ x1: r.x, y1: r.y + 0.7, x2: r.x, y2: r.y + r.h - 0.7 });
+      doors.push({ x: r.x + r.w, y: r.y + r.h - 0.8, side: 'right', swing: 'in' });
     }
 
     if (r.type === 'bathroom') {
-      windows.push({ x1: r.x + r.w / 2 - 0.6, y1: r.y, x2: r.x + r.w / 2 + 0.6, y2: r.y });
+      windows.push({ x1: r.x + r.w / 2 - 0.5, y1: r.y, x2: r.x + r.w / 2 + 0.5, y2: r.y });
       doors.push({ x: r.x, y: r.y + r.h / 2, side: 'left', swing: 'in' });
     }
 
     if (r.type === 'kitchen') {
       windows.push({ x1: r.x + 0.8, y1: r.y + r.h, x2: r.x + r.w - 0.8, y2: r.y + r.h });
-      doors.push({ x: r.x + 0.8, y: r.y, side: 'top', swing: 'in' });
+      doors.push({ x: r.x + 0.9, y: r.y, side: 'top', swing: 'in' });
     }
 
     if (r.type === 'dining') {
@@ -316,98 +313,100 @@ function generateOpenings(rooms) {
 
 function buildLayout(program) {
   const rooms = [];
-  const bedWidth = 4.2;
-  const bedHeight = 3.8;
-  const hallWidth = 1.8;
-  const bathWidth = 2.4;
-  const bathHeight = 2.6;
-  const serviceWidth = 4.2;
-  const livingWidth = program.garage ? 8.8 : 9.8;
-  const garageWidth = program.garage ? 6.4 : 0;
-  const garageHeight = 6.4;
+  const bedW = 4.1;
+  const bedH = 3.7;
+  const primaryW = 4.8;
+  const primaryH = 4.4;
+  const hallW = 1.6;
+  const bathW = 2.4;
+  const bathH = 2.6;
+  const leftWingW = primaryW + hallW + bathW;
 
-  const leftWingWidth = bedWidth + hallWidth + bathWidth;
-  let yCursor = 0;
+  const coreX = leftWingW;
+  const coreW = program.garage ? 9.2 : 10.6;
+  const livingH = 5.2;
+  const diningH = program.dining ? 3.1 : 0;
+  const kitchenH = 4.0;
 
-  rooms.push(room('Primary bedroom', 'bedroom', 0, yCursor, bedWidth, 4.4, { furniture: 'primary-bed' }));
+  const serviceX = coreX + coreW;
+  const studyW = 4.2;
+  const studyH = 3.6;
+  const garageW = program.garage ? 6.3 : 0;
+  const garageH = 5.8;
+
+  let y = 0;
+  rooms.push(room('Primary bedroom', 'bedroom', 0, y, primaryW, primaryH, { furniture: 'primary-bed' }));
 
   if (program.masterEnsuite) {
-    rooms.push(room('En-suite', 'bathroom', bedWidth + hallWidth, yCursor, bathWidth, 2.4, { furniture: 'bath' }));
+    rooms.push(room('En-suite', 'bathroom', primaryW + hallW, y, bathW, 2.2, { furniture: 'bath' }));
     if (program.walkInCloset) {
-      rooms.push(room('Walk-in closet', 'closet', bedWidth + hallWidth, yCursor + 2.4, bathWidth, 2.0, { furniture: 'closet' }));
+      rooms.push(room('Walk-in closet', 'closet', primaryW + hallW, y + 2.2, bathW, 2.2, { furniture: 'closet' }));
     }
   } else if (program.walkInCloset) {
-    rooms.push(room('Walk-in closet', 'closet', bedWidth + hallWidth, yCursor, bathWidth, 2.3, { furniture: 'closet' }));
+    rooms.push(room('Walk-in closet', 'closet', primaryW + hallW, y, bathW, 2.8, { furniture: 'closet' }));
   }
 
-  yCursor += 4.8;
-
+  y += primaryH + 0.3;
   const secondaryBedrooms = Math.max(0, program.bedrooms - 1);
   for (let i = 0; i < secondaryBedrooms; i++) {
-    rooms.push(room(`Bedroom ${i + 2}`, 'bedroom', 0, yCursor, bedWidth, bedHeight, { furniture: 'bed' }));
-    yCursor += 4.2;
+    rooms.push(room(`Bedroom ${i + 2}`, 'bedroom', 0, y, bedW, bedH, { furniture: 'bed' }));
+    y += bedH + 0.25;
   }
 
-  const leftWingHeight = Math.max(yCursor, 10.8);
-  rooms.push(room('Bedroom hall', 'hall', bedWidth, 0, hallWidth, leftWingHeight, { furniture: 'hall' }));
+  const leftWingH = Math.max(y - 0.25, 11.8);
+  rooms.push(room('Bedroom hall', 'hall', primaryW, 0, hallW, leftWingH, { furniture: 'hall' }));
+  rooms.push(room('Shared bathroom', 'bathroom', primaryW + hallW, Math.min(5.2, leftWingH - bathH - 0.4), bathW, bathH, { furniture: 'bath' }));
 
-  const sharedBathY = Math.min(leftWingHeight - bathHeight, secondaryBedrooms > 0 ? 5.2 : 4.8);
-  rooms.push(room('Shared bathroom', 'bathroom', bedWidth + hallWidth, sharedBathY, bathWidth, bathHeight, { furniture: 'bath' }));
-
-  const coreX = leftWingWidth;
-
-  rooms.push(room('Living room', 'living', coreX, 0, livingWidth, 4.6, { furniture: 'sofa' }));
+  rooms.push(room('Living room', 'living', coreX, 0, coreW, livingH, { furniture: 'sofa' }));
 
   if (program.dining) {
-    rooms.push(room('Dining', 'dining', coreX, 4.6, 4.2, 3.0, { furniture: 'dining' }));
+    rooms.push(room('Dining', 'dining', coreX, livingH, 4.4, diningH, { furniture: 'dining' }));
   }
 
-  rooms.push(room('Kitchen', 'kitchen', coreX + 4.2, 4.6, livingWidth - 4.2, 3.8, { furniture: 'kitchen' }));
+  rooms.push(room('Kitchen', 'kitchen', coreX + (program.dining ? 4.4 : 0), livingH, coreW - (program.dining ? 4.4 : 0), kitchenH, { furniture: 'kitchen' }));
 
-  if (program.scullery) {
-    rooms.push(room('Scullery', 'service', coreX + livingWidth - 2.8, 8.4, 2.8, 2.4, { furniture: 'counter' }));
-  }
-
+  const serviceBaseY = livingH + kitchenH;
   if (program.laundry) {
-    rooms.push(room('Laundry', 'service', coreX, 8.4, 3.2, 2.4, { furniture: 'laundry' }));
+    rooms.push(room('Laundry', 'service', coreX, serviceBaseY, 3.1, 2.4, { furniture: 'laundry' }));
+  }
+  if (program.scullery) {
+    rooms.push(room('Scullery', 'service', coreX + 3.25, serviceBaseY, 2.8, 2.4, { furniture: 'counter' }));
   }
 
-  const serviceX = coreX + livingWidth;
   if (program.study) {
-    rooms.push(room('Study', 'study', serviceX, 0, serviceWidth, 3.6, { furniture: 'desk' }));
+    rooms.push(room('Study', 'study', serviceX, 0, studyW, studyH, { furniture: 'desk' }));
   }
 
   if (program.garage) {
-    rooms.push(room('Garage', 'garage', serviceX, program.study ? 3.6 : 0, garageWidth, garageHeight, { furniture: 'car' }));
+    rooms.push(room('Garage', 'garage', serviceX, program.study ? studyH + 0.2 : 0, garageW, garageH, { furniture: 'car' }));
   }
 
-  const bounds = getBounds(rooms);
-  const houseWidth = bounds.right;
-  const houseHeight = bounds.bottom;
-
-  rooms.push(room('Entry foyer', 'entry', coreX - 1.8, Math.max(5.0, houseHeight - 5.2), 1.8, 2.8, { furniture: 'entry' }));
+  const interiorBounds = getBounds(rooms.filter(r => !['garden', 'patio'].includes(r.type)));
+  const houseW = interiorBounds.right;
+  const houseH = interiorBounds.bottom;
+  rooms.push(room('Entry foyer', 'entry', coreX + 0.5, Math.max(serviceBaseY + 3.0, houseH - 2.9), 1.9, 2.3, { furniture: 'entry' }));
 
   if (program.patio) {
-    rooms.push(room('Covered patio', 'patio', coreX + 0.8, -2.8, Math.min(livingWidth + (program.study ? serviceWidth : 0) - 1.2, houseWidth - coreX), 2.4, { furniture: 'outdoor' }));
+    rooms.push(room('Covered patio', 'patio', coreX + 0.8, -2.3, Math.min(coreW + (program.study ? 3.0 : 0), houseW - coreX - 0.8), 1.9, { furniture: 'outdoor' }));
   }
 
-  rooms.push(room('Garden', 'garden', -1.2, -7.2, houseWidth + 2.4, 4.0, { furniture: 'garden' }));
+  rooms.push(room('Garden', 'garden', -0.6, -5.0, houseW + 1.2, 2.8, { furniture: 'garden' }));
 
   const openings = generateOpenings(rooms);
   const summary = summarizePlan(program, rooms);
-
   return { program, rooms, openings, summary };
 }
 
 function roomFill(type) {
-  if (type === 'garden') return '#dff3df';
-  if (type === 'patio') return '#efe8db';
-  if (type === 'garage') return '#f2f4f7';
+  if (type === 'garden') return '#dcead9';
+  if (type === 'patio') return '#ece7db';
+  if (type === 'garage') return '#edf1f5';
   if (type === 'bathroom') return '#eef7ff';
-  if (type === 'kitchen') return '#fcf5ea';
-  if (type === 'living') return '#fffdf8';
-  if (type === 'dining') return '#fffaf2';
-  if (type === 'bedroom') return '#ffffff';
+  if (type === 'kitchen') return '#faf5ec';
+  if (type === 'living') return '#fbfaf6';
+  if (type === 'dining') return '#fcf7ee';
+  if (type === 'closet') return '#f6f6f7';
+  if (type === 'service') return '#f7fbfc';
   return '#ffffff';
 }
 
@@ -418,70 +417,71 @@ function renderFurniture(roomItem, scale) {
   const h = roomItem.h * scale;
 
   if (roomItem.furniture === 'bed' || roomItem.furniture === 'primary-bed') {
-    const bw = Math.min(110, w - 22);
-    const bh = roomItem.furniture === 'primary-bed' ? 70 : 58;
-    const bx = x + 16;
-    const by = y + 16;
+    const bw = Math.min(w - 26, roomItem.furniture === 'primary-bed' ? 92 : 80);
+    const bh = roomItem.furniture === 'primary-bed' ? 54 : 46;
     return `
-      <rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="10" fill="#f4f4f5" stroke="#6b7280" stroke-width="2"/>
-      <rect x="${bx + 8}" y="${by + 8}" width="${bw - 16}" height="18" rx="6" fill="#e5e7eb"/>
-      <rect x="${bx + 8}" y="${by + 30}" width="${bw - 16}" height="${bh - 38}" rx="6" fill="#fafafa"/>
+      <rect x="${x + 14}" y="${y + 14}" width="${bw}" height="${bh}" rx="10" fill="#f1f1f2" stroke="#6b7280" stroke-width="1.6"/>
+      <rect x="${x + 20}" y="${y + 20}" width="${bw - 12}" height="14" rx="5" fill="#dbdde2"/>
     `;
   }
 
   if (roomItem.furniture === 'sofa') {
     return `
-      <rect x="${x + 24}" y="${y + 28}" width="${Math.max(120, w * 0.45)}" height="40" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
-      <rect x="${x + 36}" y="${y + 78}" width="${Math.max(90, w * 0.28)}" height="44" rx="10" fill="#faf5ff" stroke="#7c3aed" stroke-width="2"/>
-      <rect x="${x + 170}" y="${y + 48}" width="56" height="56" rx="28" fill="#f8fafc" stroke="#64748b" stroke-width="2"/>
+      <rect x="${x + 18}" y="${y + 26}" width="${Math.min(114, w * 0.36)}" height="34" rx="10" fill="#ece9ff" stroke="#7c3aed" stroke-width="1.4"/>
+      <rect x="${x + 26}" y="${y + 68}" width="${Math.min(86, w * 0.25)}" height="28" rx="9" fill="#f7f5ff" stroke="#7c3aed" stroke-width="1.4"/>
+      <circle cx="${x + Math.min(156, w - 34)}" cy="${y + 62}" r="18" fill="#f5f5f4" stroke="#64748b" stroke-width="1.4"/>
     `;
   }
 
   if (roomItem.furniture === 'dining') {
+    const tableW = Math.min(90, w - 38);
+    const tableH = Math.min(40, h - 32);
+    const tx = x + 18;
+    const ty = y + 18;
     return `
-      <rect x="${x + 36}" y="${y + 24}" width="${Math.min(120, w - 72)}" height="${Math.min(64, h - 48)}" rx="10" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
-      <circle cx="${x + 48}" cy="${y + 20}" r="10" fill="#fff7ed" stroke="#b45309" stroke-width="2"/>
-      <circle cx="${x + 150}" cy="${y + 20}" r="10" fill="#fff7ed" stroke="#b45309" stroke-width="2"/>
-      <circle cx="${x + 48}" cy="${y + 96}" r="10" fill="#fff7ed" stroke="#b45309" stroke-width="2"/>
-      <circle cx="${x + 150}" cy="${y + 96}" r="10" fill="#fff7ed" stroke="#b45309" stroke-width="2"/>
+      <rect x="${tx}" y="${ty}" width="${tableW}" height="${tableH}" rx="8" fill="#f5e8bf" stroke="#b45309" stroke-width="1.4"/>
+      <circle cx="${tx + 8}" cy="${ty - 6}" r="7" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/>
+      <circle cx="${tx + tableW + 8}" cy="${ty - 6}" r="7" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/>
+      <circle cx="${tx + 8}" cy="${ty + tableH + 6}" r="7" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/>
+      <circle cx="${tx + tableW + 8}" cy="${ty + tableH + 6}" r="7" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/>
     `;
   }
 
   if (roomItem.furniture === 'kitchen' || roomItem.furniture === 'counter') {
     return `
-      <rect x="${x + 14}" y="${y + 14}" width="${w - 28}" height="18" rx="6" fill="#e5e7eb"/>
-      <rect x="${x + w - 44}" y="${y + 42}" width="24" height="${Math.max(32, h - 56)}" rx="6" fill="#e5e7eb"/>
-      <rect x="${x + 28}" y="${y + h - 40}" width="${Math.max(50, w * 0.32)}" height="24" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+      <rect x="${x + 12}" y="${y + 12}" width="${w - 24}" height="14" rx="5" fill="#dfe3e8"/>
+      <rect x="${x + w - 36}" y="${y + 34}" width="18" height="${Math.max(26, h - 48)}" rx="5" fill="#dfe3e8"/>
+      <rect x="${x + 22}" y="${y + h - 30}" width="${Math.max(40, w * 0.24)}" height="18" rx="5" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
     `;
   }
 
   if (roomItem.furniture === 'bath') {
     return `
-      <rect x="${x + 14}" y="${y + 18}" width="48" height="28" rx="10" fill="#ffffff" stroke="#0ea5e9" stroke-width="2"/>
-      <circle cx="${x + w - 32}" cy="${y + 34}" r="14" fill="#ffffff" stroke="#0ea5e9" stroke-width="2"/>
-      <rect x="${x + 16}" y="${y + h - 34}" width="${Math.min(54, w - 24)}" height="20" rx="6" fill="#ffffff" stroke="#0ea5e9" stroke-width="2"/>
+      <rect x="${x + 12}" y="${y + 14}" width="38" height="20" rx="8" fill="#ffffff" stroke="#0ea5e9" stroke-width="1.3"/>
+      <circle cx="${x + w - 24}" cy="${y + 28}" r="11" fill="#ffffff" stroke="#0ea5e9" stroke-width="1.3"/>
+      <rect x="${x + 12}" y="${y + h - 28}" width="42" height="16" rx="5" fill="#ffffff" stroke="#0ea5e9" stroke-width="1.3"/>
     `;
   }
 
   if (roomItem.furniture === 'desk') {
     return `
-      <rect x="${x + 22}" y="${y + 26}" width="${Math.max(80, w * 0.42)}" height="34" rx="8" fill="#ede9fe" stroke="#6366f1" stroke-width="2"/>
-      <rect x="${x + 52}" y="${y + 78}" width="32" height="32" rx="8" fill="#f8fafc" stroke="#6366f1" stroke-width="2"/>
+      <rect x="${x + 18}" y="${y + 22}" width="${Math.max(62, w * 0.34)}" height="24" rx="7" fill="#ece9ff" stroke="#6366f1" stroke-width="1.3"/>
+      <rect x="${x + 28}" y="${y + 56}" width="22" height="22" rx="6" fill="#f8fafc" stroke="#6366f1" stroke-width="1.2"/>
     `;
   }
 
   if (roomItem.furniture === 'car') {
     return `
-      <rect x="${x + 20}" y="${y + 28}" width="${w - 40}" height="${Math.min(96, h - 56)}" rx="18" fill="#dbeafe" stroke="#2563eb" stroke-width="3"/>
-      <circle cx="${x + 56}" cy="${y + h - 28}" r="12" fill="#111827"/>
-      <circle cx="${x + w - 56}" cy="${y + h - 28}" r="12" fill="#111827"/>
+      <rect x="${x + 16}" y="${y + 18}" width="${w - 32}" height="${Math.min(70, h - 34)}" rx="16" fill="#dbe7f7" stroke="#2563eb" stroke-width="1.8"/>
+      <circle cx="${x + 40}" cy="${y + h - 18}" r="9" fill="#0f172a"/>
+      <circle cx="${x + w - 40}" cy="${y + h - 18}" r="9" fill="#0f172a"/>
     `;
   }
 
   if (roomItem.furniture === 'laundry') {
     return `
-      <circle cx="${x + 34}" cy="${y + 32}" r="18" fill="#ffffff" stroke="#0f766e" stroke-width="2"/>
-      <rect x="${x + 64}" y="${y + 16}" width="38" height="38" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="2"/>
+      <circle cx="${x + 28}" cy="${y + 26}" r="14" fill="#ffffff" stroke="#0f766e" stroke-width="1.3"/>
+      <rect x="${x + 50}" y="${y + 12}" width="26" height="26" rx="6" fill="#ffffff" stroke="#0f766e" stroke-width="1.3"/>
     `;
   }
 
@@ -491,69 +491,57 @@ function renderFurniture(roomItem, scale) {
 function renderDoor(door, scale) {
   const x = door.x * scale;
   const y = door.y * scale;
-  const radius = door.garage ? 40 : 26;
+  const radius = door.garage ? 34 : 20;
 
   if (door.side === 'right') {
-    return `<path d="M ${x} ${y - radius} A ${radius} ${radius} 0 0 1 ${x - radius} ${y}" fill="none" stroke="#111827" stroke-width="2"/><line x1="${x}" y1="${y - radius}" x2="${x}" y2="${y}" stroke="#111827" stroke-width="3"/>`;
+    return `<path d="M ${x} ${y - radius} A ${radius} ${radius} 0 0 1 ${x - radius} ${y}" fill="none" stroke="#334155" stroke-width="1.5"/><line x1="${x}" y1="${y - radius}" x2="${x}" y2="${y}" stroke="#334155" stroke-width="2.2"/>`;
   }
-
   if (door.side === 'left') {
-    return `<path d="M ${x} ${y} A ${radius} ${radius} 0 0 1 ${x + radius} ${y - radius}" fill="none" stroke="#111827" stroke-width="2"/><line x1="${x}" y1="${y}" x2="${x}" y2="${y - radius}" stroke="#111827" stroke-width="3"/>`;
+    return `<path d="M ${x} ${y} A ${radius} ${radius} 0 0 1 ${x + radius} ${y - radius}" fill="none" stroke="#334155" stroke-width="1.5"/><line x1="${x}" y1="${y}" x2="${x}" y2="${y - radius}" stroke="#334155" stroke-width="2.2"/>`;
   }
-
   if (door.side === 'top') {
-    return `<path d="M ${x - radius} ${y} A ${radius} ${radius} 0 0 1 ${x} ${y + radius}" fill="none" stroke="#111827" stroke-width="2"/><line x1="${x - radius}" y1="${y}" x2="${x}" y2="${y}" stroke="#111827" stroke-width="3"/>`;
+    return `<path d="M ${x - radius} ${y} A ${radius} ${radius} 0 0 1 ${x} ${y + radius}" fill="none" stroke="#334155" stroke-width="1.5"/><line x1="${x - radius}" y1="${y}" x2="${x}" y2="${y}" stroke="#334155" stroke-width="2.2"/>`;
   }
-
-  return `<path d="M ${x} ${y - radius} A ${radius} ${radius} 0 0 0 ${x + radius} ${y}" fill="none" stroke="#111827" stroke-width="2"/><line x1="${x}" y1="${y}" x2="${x + radius}" y2="${y}" stroke="#111827" stroke-width="3"/>`;
+  return `<path d="M ${x} ${y - radius} A ${radius} ${radius} 0 0 0 ${x + radius} ${y}" fill="none" stroke="#334155" stroke-width="1.5"/><line x1="${x}" y1="${y}" x2="${x + radius}" y2="${y}" stroke="#334155" stroke-width="2.2"/>`;
 }
 
 function renderWindow(windowItem, scale) {
-  return `<line x1="${windowItem.x1 * scale}" y1="${windowItem.y1 * scale}" x2="${windowItem.x2 * scale}" y2="${windowItem.y2 * scale}" stroke="#38bdf8" stroke-width="8" stroke-linecap="round"/>`;
+  return `<line x1="${windowItem.x1 * scale}" y1="${windowItem.y1 * scale}" x2="${windowItem.x2 * scale}" y2="${windowItem.y2 * scale}" stroke="#38bdf8" stroke-width="6" stroke-linecap="round"/>`;
 }
 
 function renderSvg(plan) {
-  const scale = 34;
-  const padding = 90;
+  const scale = 36;
+  const padding = 56;
   const bounds = getBounds(plan.rooms);
-
   const width = (bounds.right - bounds.left) * scale + padding * 2;
   const height = (bounds.bottom - bounds.top) * scale + padding * 2;
 
-  const translated = plan.rooms.map(r => ({
-    ...r,
-    x: r.x - bounds.left + (padding / scale),
-    y: r.y - bounds.top + (padding / scale)
-  }));
+  const shiftX = padding / scale - bounds.left;
+  const shiftY = padding / scale - bounds.top;
 
-  const translatedWindows = plan.openings.windows.map(w => ({
-    x1: w.x1 - bounds.left + (padding / scale),
-    y1: w.y1 - bounds.top + (padding / scale),
-    x2: w.x2 - bounds.left + (padding / scale),
-    y2: w.y2 - bounds.top + (padding / scale)
-  }));
-
-  const translatedDoors = plan.openings.doors.map(d => ({
-    ...d,
-    x: d.x - bounds.left + (padding / scale),
-    y: d.y - bounds.top + (padding / scale)
-  }));
+  const translated = plan.rooms.map(r => ({ ...r, x: r.x + shiftX, y: r.y + shiftY }));
+  const translatedWindows = plan.openings.windows.map(w => ({ x1: w.x1 + shiftX, y1: w.y1 + shiftY, x2: w.x2 + shiftX, y2: w.y2 + shiftY }));
+  const translatedDoors = plan.openings.doors.map(d => ({ ...d, x: d.x + shiftX, y: d.y + shiftY }));
 
   const roomSvg = translated.map(r => {
     const x = r.x * scale;
     const y = r.y * scale;
     const w = r.w * scale;
     const h = r.h * scale;
-    const stroke = r.type === 'garden' ? '#94a3b8' : '#111827';
-    const strokeWidth = r.type === 'garden' ? 2 : 6;
-    const dash = r.type === 'patio' ? '10 7' : 'none';
-    const labelY = y + 30;
+    const isOutdoor = ['garden', 'patio'].includes(r.type);
+    const wallStroke = r.type === 'garden' ? '#9fb5ad' : '#111827';
+    const strokeWidth = r.type === 'garden' ? 1.8 : 4.6;
+    const dash = r.type === 'patio' ? '8 5' : '';
+    const labelSize = isOutdoor ? 13 : 11;
+    const titleSize = isOutdoor ? 14 : 12;
+    const showArea = w > 90 && h > 45;
+    const titleY = y + 22;
 
     return `
       <g>
-        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r.type === 'garden' ? 22 : 14}" fill="${roomFill(r.type)}" stroke="${stroke}" stroke-width="${strokeWidth}" ${dash !== 'none' ? `stroke-dasharray="${dash}"` : ''}/>
-        <text x="${x + 16}" y="${labelY}" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="700" fill="#0f172a">${escapeXml(r.name)}</text>
-        <text x="${x + 16}" y="${labelY + 22}" font-size="12" font-family="Inter, Arial, sans-serif" fill="#475569">${Math.round(r.w * r.h)} m²</text>
+        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${isOutdoor ? 14 : 12}" fill="${roomFill(r.type)}" stroke="${wallStroke}" stroke-width="${strokeWidth}" ${dash ? `stroke-dasharray="${dash}"` : ''}/>
+        <text x="${x + 10}" y="${titleY}" font-size="${titleSize}" font-family="Inter, Arial, sans-serif" font-weight="700" fill="#0f172a">${escapeXml(r.name)}</text>
+        ${showArea ? `<text x="${x + 10}" y="${titleY + 16}" font-size="${labelSize}" font-family="Inter, Arial, sans-serif" fill="#64748b">${Math.round(r.w * r.h)} m²</text>` : ''}
         ${renderFurniture(r, scale)}
       </g>
     `;
@@ -563,27 +551,22 @@ function renderSvg(plan) {
     <svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(width)}" height="${Math.round(height)}" viewBox="0 0 ${Math.round(width)} ${Math.round(height)}">
       <defs>
         <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-          <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.12"/>
+          <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.08"/>
         </filter>
-        <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
-          <path d="M 34 0 L 0 0 0 34" fill="none" stroke="#e5e7eb" stroke-width="1"/>
+        <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+          <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#edf0f3" stroke-width="1"/>
         </pattern>
       </defs>
 
-      <rect width="100%" height="100%" fill="#f8fafc"/>
-      <rect width="100%" height="100%" fill="url(#grid)" opacity="0.5"/>
-      <g filter="url(#shadow)">
-        ${roomSvg}
-      </g>
+      <rect width="100%" height="100%" rx="28" fill="#f6f7f8"/>
+      <rect x="14" y="14" width="${Math.round(width - 28)}" height="${Math.round(height - 28)}" rx="26" fill="url(#grid)"/>
+      <g filter="url(#shadow)">${roomSvg}</g>
+      <g>${translatedWindows.map(w => renderWindow(w, scale)).join('')}${translatedDoors.map(d => renderDoor(d, scale)).join('')}</g>
       <g>
-        ${translatedWindows.map(w => renderWindow(w, scale)).join('')}
-        ${translatedDoors.map(d => renderDoor(d, scale)).join('')}
-      </g>
-      <g>
-        <rect x="24" y="22" width="380" height="86" rx="20" fill="#ffffff" fill-opacity="0.9" stroke="#e2e8f0"/>
-        <text x="42" y="52" font-size="26" font-family="Inter, Arial, sans-serif" font-weight="800" fill="#0f172a">${escapeXml(plan.summary.title)}</text>
-        <text x="42" y="79" font-size="14" font-family="Inter, Arial, sans-serif" fill="#475569">${escapeXml(`${plan.summary.bedrooms} bed • ${plan.summary.bathrooms} bath • ${plan.summary.estimatedArea} • ${plan.summary.style}`)}</text>
-        <text x="42" y="99" font-size="12" font-family="Inter, Arial, sans-serif" fill="#64748b">Rendered floor plan preview</text>
+        <rect x="18" y="18" width="320" height="64" rx="16" fill="#ffffff" fill-opacity="0.96" stroke="#e5e7eb"/>
+        <text x="36" y="45" font-size="22" font-family="Inter, Arial, sans-serif" font-weight="800" fill="#0f172a">${escapeXml(plan.summary.title)}</text>
+        <text x="36" y="64" font-size="12" font-family="Inter, Arial, sans-serif" fill="#475569">${escapeXml(`${plan.summary.bedrooms} bed • ${plan.summary.bathrooms} bath • ${plan.summary.estimatedArea} • ${plan.summary.style}`)}</text>
+        <text x="36" y="78" font-size="10" font-family="Inter, Arial, sans-serif" fill="#94a3b8">Rendered floor plan preview</text>
       </g>
     </svg>
   `;
@@ -599,20 +582,14 @@ async function buildPlanFromDescription(description) {
   const program = await generateProgram(description);
   const layout = buildLayout(program);
   const image = renderSvg(layout);
-  return {
-    ...layout,
-    ...image
-  };
+  return { ...layout, ...image };
 }
 
 async function buildPlanFromRevision(currentProgram, revisionRequest) {
   const program = await reviseProgram(currentProgram, revisionRequest);
   const layout = buildLayout(program);
   const image = renderSvg(layout);
-  return {
-    ...layout,
-    ...image
-  };
+  return { ...layout, ...image };
 }
 
 app.get('/health', (_req, res) => {
@@ -620,16 +597,11 @@ app.get('/health', (_req, res) => {
 });
 
 app.get('/api/meta', (_req, res) => {
-  res.json({
-    ok: true,
-    features: ['generate-floor-plan-image', 'revise-floor-plan-image'],
-    version: '2.0.0'
-  });
+  res.json({ ok: true, features: ['generate-floor-plan-image', 'revise-floor-plan-image'], version: '2.1.0' });
 });
 
 app.post('/api/floor-plans/generate', async (req, res) => {
   const description = text(req.body?.description);
-
   if (!description) {
     return res.status(400).json({ error: 'Missing description' });
   }
@@ -639,9 +611,7 @@ app.post('/api/floor-plans/generate', async (req, res) => {
     res.json({ ok: true, plan });
   } catch (err) {
     console.error('GENERATE ERROR:', err);
-    res.status(500).json({
-      error: err?.message || 'Could not generate floor plan right now.'
-    });
+    res.status(500).json({ error: err?.message || 'Could not generate floor plan right now.' });
   }
 });
 
@@ -658,13 +628,11 @@ app.post('/api/floor-plans/revise', async (req, res) => {
     res.json({ ok: true, plan });
   } catch (err) {
     console.error('REVISE ERROR:', err);
-    res.status(500).json({
-      error: err?.message || 'Could not revise floor plan right now.'
-    });
+    res.status(500).json({ error: err?.message || 'Could not revise floor plan right now.' });
   }
 });
 
-app.use((req, res, next) => {
+app.use((req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'Not found' });
   }
